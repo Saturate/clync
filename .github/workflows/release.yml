@@ -20,10 +20,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.SATURATE_CI_APP_ID }}
+          private-key: ${{ secrets.SATURATE_CI_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Configure git
         run: |
@@ -49,7 +56,7 @@ jobs:
           echo "version=$new_version" >> $GITHUB_OUTPUT
 
           sed -i "0,/^version = .*/s//version = \"${new_version}\"/" Cargo.toml
-          cargo check 2>/dev/null || true  # update Cargo.lock
+          cargo check 2>/dev/null || true
 
       - name: Commit and tag
         run: |
