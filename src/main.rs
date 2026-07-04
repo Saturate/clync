@@ -518,30 +518,7 @@ fn init_with_options(
         std::fs::write(repo.join(".gitignore"), ".clync.lock\n")?;
     }
 
-    if !repo.join("README.md").exists() {
-        let enc_note = match &config.encryption {
-            EncryptionConfig::None => "Files are stored in plain text.".to_string(),
-            EncryptionConfig::Passphrase { .. } => {
-                "Files are encrypted with age (passphrase-based).".to_string()
-            }
-            _ => "Files are encrypted with age (key-based).".to_string(),
-        };
-        std::fs::write(
-            repo.join("README.md"),
-            format!(
-                "# clync sync repo\n\n\
-                 This repo is managed by [clync](https://github.com/Saturate/clync) \
-                 and contains synced Claude Code data.\n\n\
-                 {enc_note}\n\n\
-                 ## Setup on another machine\n\n\
-                 ```bash\n\
-                 cargo install clync\n\
-                 clync join <this-repo-url>\n\
-                 ```\n\n\
-                 See `clync.toml` for sync configuration.\n"
-            ),
-        )?;
-    }
+    ensure_repo_readme(&config)?;
 
     println!("sync repo ready at {}", repo.display());
     Ok(())
@@ -600,6 +577,7 @@ pub fn do_push(use_git: bool) -> Result<PushOutput> {
         let _lock = storage.try_lock()?;
 
         repo_meta::RepoMeta::from_config(&config).save(&config.sync.repo)?;
+        ensure_repo_readme(&config)?;
 
         let filter = ScanFilter::default();
         let result = sync::push(&config, &cipher, &filter, &storage)?;
@@ -695,6 +673,7 @@ fn cmd_push(no_git: bool, filter: ScanFilter) -> Result<()> {
     let use_git = config.sync.auto_git && !no_git;
 
     repo_meta::RepoMeta::from_config(&config).save(&config.sync.repo)?;
+    ensure_repo_readme(&config)?;
 
     let result = sync::push(&config, &cipher, &filter, &storage)?;
     let verb = if matches!(config.encryption, EncryptionConfig::None) {
@@ -1117,6 +1096,34 @@ fn short_uuid(uuid: &str) -> &str {
         end -= 1;
     }
     &uuid[..end]
+}
+
+fn ensure_repo_readme(config: &Config) -> Result<()> {
+    let path = config.sync.repo.join("README.md");
+    if path.exists() {
+        return Ok(());
+    }
+    let enc_note = match &config.encryption {
+        EncryptionConfig::None => "Files are stored in plain text.",
+        EncryptionConfig::Passphrase { .. } => "Files are encrypted with age (passphrase-based).",
+        _ => "Files are encrypted with age (key-based).",
+    };
+    std::fs::write(
+        &path,
+        format!(
+            "# clync sync repo\n\n\
+             This repo is managed by [clync](https://github.com/Saturate/clync) \
+             and contains synced Claude Code data.\n\n\
+             {enc_note}\n\n\
+             ## Setup on another machine\n\n\
+             ```bash\n\
+             cargo install clync\n\
+             clync join <this-repo-url>\n\
+             ```\n\n\
+             See `clync.toml` for sync configuration.\n"
+        ),
+    )?;
+    Ok(())
 }
 
 fn write_secret_file(path: &std::path::Path, content: &str) -> Result<()> {
