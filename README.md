@@ -2,6 +2,8 @@
 
 Encrypted sync for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) across machines.
 
+![Demo](demo.gif)
+
 ## What it does
 
 Claude Code stores conversations, memories, settings, commands, and skills locally in `~/.claude/`. clync encrypts all of it with [age](https://age-encryption.org) and syncs it through a git repo. When the same session is edited on two machines, clync merges them using the conversation's UUID tree structure instead of overwriting.
