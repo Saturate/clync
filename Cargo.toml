@@ -1,0 +1,33 @@
+[package]
+name = "clync"
+version = "0.1.0"
+edition = "2024"
+description = "Encrypted sync for Claude Code across machines"
+license = "MIT"
+repository = "https://github.com/Saturate/clync"
+keywords = ["claude", "claude-code", "sync", "encryption", "age"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+age = { version = "0.11", features = ["armor"] }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+flate2 = "1"
+hostname = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tar = "0.4"
+toml = "0.8"
+fs2 = "0.4"
+rayon = "1"
+walkdir = "2"
+
+[dev-dependencies]
+filetime = "0.2"
+walkdir = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
