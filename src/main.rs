@@ -1108,6 +1108,14 @@ fn ensure_repo_readme(config: &Config) -> Result<()> {
         EncryptionConfig::Passphrase { .. } => "Files are encrypted with age (passphrase-based).",
         _ => "Files are encrypted with age (key-based).",
     };
+    let repo_url = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(&config.sync.repo)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| "<this-repo-url>".to_string());
     std::fs::write(
         &path,
         format!(
@@ -1118,7 +1126,7 @@ fn ensure_repo_readme(config: &Config) -> Result<()> {
              ## Setup on another machine\n\n\
              ```bash\n\
              cargo install clync\n\
-             clync join <this-repo-url>\n\
+             clync join {repo_url}\n\
              ```\n\n\
              See `clync.toml` for sync configuration.\n"
         ),
