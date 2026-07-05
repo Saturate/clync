@@ -989,13 +989,36 @@ fn cmd_join(
         let env_var =
             input.prompt_with_default("env var name for passphrase", "CLYNC_PASSPHRASE")?;
         EncryptionConfig::Passphrase { env_var }
+    } else if let Some(ref hint) = meta.as_ref().and_then(|m| m.encryption.hint.clone()) {
+        let method = meta
+            .as_ref()
+            .map(|m| m.encryption.method.as_str())
+            .unwrap_or("");
+        match method {
+            "onepassword" => {
+                let use_op = input.prompt_yn(&format!("use 1Password ({hint})?"), true)?;
+                if use_op {
+                    EncryptionConfig::OnePassword {
+                        reference: hint.clone(),
+                    }
+                } else {
+                    prompt_manual_key(input, &config_dir)?
+                }
+            }
+            "bitwarden" => {
+                let field = input.prompt_with_default("bitwarden field name", "notes")?;
+                EncryptionConfig::Bitwarden {
+                    item_id: hint.clone(),
+                    field,
+                }
+            }
+            "pass" => EncryptionConfig::Pass {
+                entry: hint.clone(),
+            },
+            _ => prompt_manual_key(input, &config_dir)?,
+        }
     } else {
-        println!("this repo requires an age key to decrypt");
-        println!("provide the same key used on the other machine");
-        let key = input.prompt("paste age secret key (AGE-SECRET-KEY-...)")?;
-        let key_path = config_dir.join("key.txt");
-        write_secret_file(&key_path, &format!("{key}\n"))?;
-        EncryptionConfig::KeyFile { path: key_path }
+        prompt_manual_key(input, &config_dir)?
     };
 
     let claude_dir = config::home_dir()
@@ -1121,6 +1144,18 @@ fn format_age(mtime: u64) -> String {
     } else {
         format!("{}d ago", diff / 86400)
     }
+}
+
+fn prompt_manual_key(
+    input: &dyn InputSource,
+    config_dir: &std::path::Path,
+) -> Result<EncryptionConfig> {
+    println!("this repo requires an age key to decrypt");
+    println!("provide the same key used on the other machine");
+    let key = input.prompt("paste age secret key (AGE-SECRET-KEY-...)")?;
+    let key_path = config_dir.join("key.txt");
+    write_secret_file(&key_path, &format!("{key}\n"))?;
+    Ok(EncryptionConfig::KeyFile { path: key_path })
 }
 
 fn ssh_to_https(url: &str) -> String {
