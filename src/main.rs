@@ -968,8 +968,18 @@ fn cmd_join(
     });
 
     let git_storage = if repo.join(".git").exists() {
-        println!("sync repo already exists, pulling latest...");
         let storage = GitStorage::new(repo.clone());
+        let existing_remote = storage.get_remote_url().unwrap_or_default();
+        let normalized_existing = resolver::normalize_remote(&existing_remote);
+        let normalized_new = resolver::normalize_remote(&url);
+        if !normalized_existing.is_empty() && normalized_existing != normalized_new {
+            bail!(
+                "directory {} already contains a different repo ({}). Use --repo to specify a different path.",
+                repo.display(),
+                existing_remote
+            );
+        }
+        println!("sync repo already exists, pulling latest...");
         storage.pull_remote()?;
         storage
     } else {
