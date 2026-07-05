@@ -3,6 +3,13 @@ use std::path::Path;
 use std::process::Command;
 
 pub fn build_remote_map(claude_projects_dir: &Path) -> HashMap<String, String> {
+    build_remote_map_with(claude_projects_dir, &git_remote_url)
+}
+
+pub fn build_remote_map_with(
+    claude_projects_dir: &Path,
+    get_remote: &dyn Fn(&str) -> Option<String>,
+) -> HashMap<String, String> {
     let mut map = HashMap::new();
 
     let entries = match std::fs::read_dir(claude_projects_dir) {
@@ -16,7 +23,7 @@ pub fn build_remote_map(claude_projects_dir: &Path) -> HashMap<String, String> {
         }
         let dir_name = entry.file_name().to_string_lossy().to_string();
         let real_path = decode_project_dir(&dir_name);
-        if let Some(remote) = git_remote_url(&real_path) {
+        if let Some(remote) = get_remote(&real_path) {
             let normalized = normalize_remote(&remote);
             map.insert(normalized, dir_name);
         }
@@ -77,12 +84,12 @@ pub fn resolve_project_dir(
     Some(candidate)
 }
 
-fn decode_project_dir(encoded: &str) -> String {
+pub fn decode_project_dir(encoded: &str) -> String {
     let path = encoded.replace('-', "/");
     format!("/{}", path.trim_start_matches('/'))
 }
 
-fn git_remote_url(path: &str) -> Option<String> {
+pub fn git_remote_url(path: &str) -> Option<String> {
     let path = Path::new(path);
     if !path.exists() {
         return None;
@@ -99,7 +106,7 @@ fn git_remote_url(path: &str) -> Option<String> {
     }
 }
 
-fn normalize_remote(url: &str) -> String {
+pub fn normalize_remote(url: &str) -> String {
     let s = url.trim_end_matches('/').trim_end_matches(".git");
 
     if let Some(rest) = s.strip_prefix("git@") {

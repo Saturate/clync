@@ -48,8 +48,7 @@ impl GitStorage {
         Ok(file)
     }
 
-    #[allow(dead_code)]
-    pub fn init(repo_path: &Path) -> Result<Self> {
+    pub fn init_repo(repo_path: &Path) -> Result<Self> {
         std::fs::create_dir_all(repo_path)?;
         if !repo_path.join(".git").exists() {
             let status = std::process::Command::new("git")
@@ -60,10 +59,23 @@ impl GitStorage {
             if !status.success() {
                 bail!("git init failed");
             }
-            std::fs::write(repo_path.join(".gitignore"), "# clync sync repo\n")?;
+            std::fs::write(repo_path.join(".gitignore"), ".clync.lock\n")?;
         }
         Ok(Self {
             repo_path: repo_path.to_path_buf(),
+        })
+    }
+
+    pub fn clone_repo(url: &str, dest: &Path) -> Result<Self> {
+        let status = std::process::Command::new("git")
+            .args(["clone", url, &dest.to_string_lossy()])
+            .status()
+            .context("git clone failed")?;
+        if !status.success() {
+            bail!("git clone failed");
+        }
+        Ok(Self {
+            repo_path: dest.to_path_buf(),
         })
     }
 
@@ -76,6 +88,41 @@ impl GitStorage {
             .unwrap_or(false)
     }
 
+    pub fn get_remote_url(&self) -> Option<String> {
+        std::process::Command::new("git")
+            .args(["remote", "get-url", "origin"])
+            .current_dir(&self.repo_path)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    }
+
+    pub fn add_remote(&self, url: &str) -> Result<()> {
+        self.run_git(&["remote", "add", "origin", url])
+    }
+
+    pub fn checkout_first_branch(&self) -> Result<()> {
+        let branches = std::process::Command::new("git")
+            .args(["branch", "-r"])
+            .current_dir(&self.repo_path)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        for line in branches.lines() {
+            let branch = line.trim().trim_start_matches("origin/");
+            if branch == "HEAD" || branch.contains("->") {
+                continue;
+            }
+            let _ = std::process::Command::new("git")
+                .args(["checkout", branch])
+                .current_dir(&self.repo_path)
+                .status();
+            break;
+        }
+        Ok(())
+    }
+
     fn run_git(&self, args: &[&str]) -> Result<()> {
         let status = std::process::Command::new("git")
             .args(args)
@@ -86,11 +133,6 @@ impl GitStorage {
             bail!("git {} exited with {}", args.join(" "), status);
         }
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn add_remote(&self, url: &str) -> Result<()> {
-        self.run_git(&["remote", "add", "origin", url])
     }
 
     pub fn commit(&self, message: &str) -> Result<()> {
