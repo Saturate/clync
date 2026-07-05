@@ -460,9 +460,9 @@ fn help_text(topic: &str) -> String {
 # clync setup
 
 1. Install: cargo install clync
-2. Initialize: clync init --repo ~/clync-repo
+2. Initialize: clync init --repo ~/.clync/data
    - Add --onepassword 'op://vault/clync/age-key' for 1Password key storage
-3. Add remote: cd ~/clync-repo && git remote add origin <url>
+3. Add remote: cd ~/.clync/data && git remote add origin <url>
 4. First sync: clync push --git
 
 For 1Password: store the printed secret key at the op:// path, then verify with `op read`."
@@ -535,7 +535,7 @@ Config location: ~/Library/Application Support/clync/config.toml (macOS)
                   ~/.config/clync/config.toml (Linux)
 
 [sync]
-repo = '~/clync-repo'           # path to the git sync repo
+repo = '~/.clync/data'           # path to the git sync repo
 claude_dir = '~/.claude'         # claude code data directory
 include_companion_dirs = false   # sync subagent/tool-result dirs
 
