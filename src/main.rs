@@ -167,6 +167,16 @@ enum Cmd {
         #[arg(long)]
         no_encrypt: bool,
     },
+    /// Remove clync config and optionally the sync repo. Sessions in ~/.claude are untouched.
+    Reset {
+        /// Keep the local sync repo (only remove config and key)
+        #[arg(long)]
+        keep_repo: bool,
+
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// Run as MCP server (stdio JSON-RPC)
     Mcp,
 }
@@ -232,6 +242,7 @@ fn main() -> Result<()> {
             onepassword,
             no_encrypt,
         } => cmd_join(url, repo, onepassword, no_encrypt, &input),
+        Cmd::Reset { keep_repo, yes } => cmd_reset(keep_repo, yes, &input),
         Cmd::Mcp => mcp::run_mcp_server(),
     }
 }
@@ -1144,6 +1155,47 @@ fn format_age(mtime: u64) -> String {
     } else {
         format!("{}d ago", diff / 86400)
     }
+}
+
+fn cmd_reset(keep_repo: bool, yes: bool, input: &dyn InputSource) -> Result<()> {
+    let config_path = Config::config_path()?;
+    if !config_path.exists() {
+        println!("no clync config found, nothing to reset");
+        return Ok(());
+    }
+
+    let config = Config::load()?;
+    let config_dir = Config::config_dir()?;
+    let repo_path = &config.sync.repo;
+
+    println!("this will remove:");
+    println!("  config: {}", config_dir.display());
+    if !keep_repo && repo_path.exists() {
+        println!("  sync repo: {}", repo_path.display());
+    }
+    println!();
+    println!("sessions in ~/.claude will NOT be touched");
+
+    if !yes {
+        let confirm = input.prompt_yn("continue?", false)?;
+        if !confirm {
+            println!("cancelled");
+            return Ok(());
+        }
+    }
+
+    if !keep_repo && repo_path.exists() {
+        std::fs::remove_dir_all(repo_path)
+            .with_context(|| format!("could not remove {}", repo_path.display()))?;
+        println!("removed {}", repo_path.display());
+    }
+
+    std::fs::remove_dir_all(&config_dir)
+        .with_context(|| format!("could not remove {}", config_dir.display()))?;
+    println!("removed {}", config_dir.display());
+    println!("reset complete. run `clync init` or `clync join` to set up again.");
+
+    Ok(())
 }
 
 fn prompt_manual_key(
