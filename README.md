@@ -1,5 +1,9 @@
 # clync
 
+[![CI](https://github.com/Saturate/clync/actions/workflows/ci.yml/badge.svg)](https://github.com/Saturate/clync/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/clync)](https://crates.io/crates/clync)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Encrypted sync for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) across machines.
 
 ![Demo](demo.gif)
