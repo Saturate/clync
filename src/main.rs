@@ -1051,9 +1051,10 @@ fn ensure_repo_readme(config: &Config) -> Result<()> {
         _ => "Files are encrypted with age (key-based).",
     };
     let storage = GitStorage::new(config.sync.repo.clone());
-    let repo_url = storage
+    let ssh_url = storage
         .get_remote_url()
         .unwrap_or_else(|| "<this-repo-url>".to_string());
+    let https_url = ssh_to_https(&ssh_url);
     std::fs::write(
         &path,
         format!(
@@ -1063,8 +1064,11 @@ fn ensure_repo_readme(config: &Config) -> Result<()> {
              {enc_note}\n\n\
              ## Setup on another machine\n\n\
              ```bash\n\
-             cargo install clync\n\
-             clync join {repo_url}\n\
+             cargo install clync\n\n\
+             # SSH\n\
+             clync join {ssh_url}\n\n\
+             # HTTPS\n\
+             clync join {https_url}\n\
              ```\n\n\
              See `clync.toml` for sync configuration.\n"
         ),
@@ -1116,6 +1120,14 @@ fn format_age(mtime: u64) -> String {
     } else {
         format!("{}d ago", diff / 86400)
     }
+}
+
+fn ssh_to_https(url: &str) -> String {
+    if let Some(rest) = url.strip_prefix("git@") {
+        let converted = rest.replacen(':', "/", 1);
+        return format!("https://{converted}");
+    }
+    url.to_string()
 }
 
 fn format_size(bytes: u64) -> String {

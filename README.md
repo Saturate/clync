@@ -69,7 +69,11 @@ clync init --repo ~/.clync/data --no-encrypt
 ### Second machine
 
 ```bash
+# SSH
 clync join git@github.com:you/clync-data.git
+
+# or HTTPS
+clync join https://github.com/you/clync-data.git
 ```
 
 This clones the repo, reads `clync.toml` to detect the encryption method, asks for the key, and pulls all sessions.
