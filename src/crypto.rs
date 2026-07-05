@@ -1,10 +1,10 @@
 use age::secrecy::ExposeSecret;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::Command;
 
 use crate::config::EncryptionConfig;
+use crate::secret::{CliSecretProvider, SecretProvider};
 
 pub enum Cipher {
     Age(Keys),
@@ -14,6 +14,13 @@ pub enum Cipher {
 
 impl Cipher {
     pub fn from_config(config: &EncryptionConfig) -> Result<Self> {
+        Self::from_config_with_provider(config, &CliSecretProvider)
+    }
+
+    pub fn from_config_with_provider(
+        config: &EncryptionConfig,
+        provider: &dyn SecretProvider,
+    ) -> Result<Self> {
         match config {
             EncryptionConfig::None => Ok(Self::Plaintext),
             EncryptionConfig::Passphrase { env_var } => {
@@ -24,7 +31,10 @@ impl Cipher {
                 })?;
                 Ok(Self::Passphrase(passphrase))
             }
-            other => Ok(Self::Age(Keys::from_config(other)?)),
+            other => {
+                let secret_key = provider.read_secret(other)?;
+                Ok(Self::Age(Keys::from_secret_key(&secret_key)?))
+            }
         }
     }
 
@@ -90,29 +100,11 @@ pub struct Keys {
 }
 
 impl Keys {
-    pub fn from_config(config: &EncryptionConfig) -> Result<Self> {
-        let secret_key = match config {
-            EncryptionConfig::KeyFile { path } => std::fs::read_to_string(path)
-                .with_context(|| format!("could not read key file: {}", path.display()))?
-                .trim()
-                .to_string(),
-            EncryptionConfig::OnePassword { reference } => {
-                run_secret_cmd("op", &["read", reference, "--no-newline"])?
-            }
-            EncryptionConfig::Bitwarden { item_id, field } => {
-                run_secret_cmd("bw", &["get", field, item_id])?
-            }
-            EncryptionConfig::Pass { entry } => run_secret_cmd("pass", &["show", entry])?,
-            EncryptionConfig::Passphrase { .. } | EncryptionConfig::None => {
-                bail!("cannot create key-based cipher for this encryption mode")
-            }
-        };
-
+    pub fn from_secret_key(secret_key: &str) -> Result<Self> {
         let identity: age::x25519::Identity = secret_key
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid age secret key: {e}"))?;
         let recipient = identity.to_public();
-
         Ok(Self {
             identity,
             recipient,
@@ -159,23 +151,6 @@ impl Keys {
             recipient,
         }
     }
-}
-
-fn run_secret_cmd(program: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to run `{program}`. Is it installed?"))?;
-    if !output.status.success() {
-        bail!(
-            "{program} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    Ok(String::from_utf8(output.stdout)
-        .context("command returned non-UTF8 data")?
-        .trim()
-        .to_string())
 }
 
 #[cfg(test)]
@@ -227,5 +202,28 @@ mod tests {
         let keys = Keys::generate();
         assert!(keys.public_key().starts_with("age1"));
         assert!(keys.secret_key().starts_with("AGE-SECRET-KEY-"));
+    }
+
+    #[test]
+    fn from_secret_key_roundtrip() {
+        let keys = Keys::generate();
+        let secret = keys.secret_key();
+        let keys2 = Keys::from_secret_key(&secret).unwrap();
+        assert_eq!(keys.public_key(), keys2.public_key());
+    }
+
+    #[test]
+    fn from_config_with_mock_provider() {
+        let keys = Keys::generate();
+        let secret = keys.secret_key();
+        let provider = crate::secret::MockSecretProvider::new(&secret);
+        let config = EncryptionConfig::OnePassword {
+            reference: "op://test/test/key".to_string(),
+        };
+        let cipher = Cipher::from_config_with_provider(&config, &provider).unwrap();
+        let data = b"test data";
+        let encrypted = cipher.encrypt(data).unwrap();
+        let decrypted = cipher.decrypt(&encrypted).unwrap();
+        assert_eq!(&decrypted, data);
     }
 }

@@ -128,3 +128,69 @@ pub fn expand_path(p: &Path) -> PathBuf {
     }
     p.to_path_buf()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_path_no_tilde() {
+        let p = PathBuf::from("/usr/local/bin");
+        assert_eq!(expand_path(&p), p);
+    }
+
+    #[test]
+    fn expand_path_with_tilde() {
+        let result = expand_path(&PathBuf::from("~/test/path"));
+        assert!(!result.to_string_lossy().starts_with("~/"));
+        assert!(result.to_string_lossy().ends_with("test/path"));
+    }
+
+    #[test]
+    fn expand_path_relative() {
+        let p = PathBuf::from("relative/path");
+        assert_eq!(expand_path(&p), p);
+    }
+
+    #[test]
+    fn home_dir_returns_some() {
+        assert!(home_dir().is_some());
+    }
+
+    #[test]
+    fn sync_targets_default_all_true() {
+        let targets = SyncTargets::default();
+        assert!(targets.sessions);
+        assert!(targets.memories);
+        assert!(targets.settings);
+        assert!(targets.commands);
+        assert!(targets.skills);
+        assert!(targets.global_claude_md);
+    }
+
+    #[test]
+    fn config_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("clync-config-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+
+        let config = Config {
+            sync: SyncConfig {
+                repo: PathBuf::from("/tmp/repo"),
+                claude_dir: PathBuf::from("/home/user/.claude"),
+                include_companion_dirs: false,
+                auto_git: true,
+            },
+            encryption: EncryptionConfig::None,
+            targets: SyncTargets::default(),
+        };
+
+        config.save(&path).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let loaded: Config = toml::from_str(&contents).unwrap();
+        assert!(matches!(loaded.encryption, EncryptionConfig::None));
+        assert!(loaded.targets.sessions);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

@@ -16,7 +16,7 @@ use crate::scanner::{LocalSession, ScanFilter, scan_sessions};
 use crate::storage::StorageProvider;
 
 fn is_safe_path_component(s: &str) -> bool {
-    if s.is_empty() || s.contains('/') || s.contains('\\') {
+    if s.contains('/') || s.contains('\\') {
         return false;
     }
     !s.split('-').any(|seg| seg == "..")

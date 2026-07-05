@@ -1,6 +1,7 @@
 mod config;
 mod crypto;
 mod extras;
+pub(crate) mod io;
 mod list;
 mod manifest;
 mod mcp;
@@ -9,6 +10,7 @@ mod parser;
 mod repo_meta;
 mod resolver;
 mod scanner;
+pub(crate) mod secret;
 mod storage;
 mod sync;
 mod synclog;
@@ -16,10 +18,10 @@ mod synclog;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use std::process::Command;
 
 use config::{Config, EncryptionConfig, SyncConfig};
 use crypto::Cipher;
+use io::{InputSource, StdioInput};
 use scanner::ScanFilter;
 use storage::GitStorage;
 
@@ -188,13 +190,14 @@ enum ConfigAction {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let input = StdioInput;
 
     match cli.command {
         Cmd::Init {
             repo,
             onepassword,
             no_encrypt,
-        } => cmd_init(repo, onepassword, no_encrypt),
+        } => cmd_init(repo, onepassword, no_encrypt, &input),
         Cmd::Push {
             no_git,
             max_age,
@@ -228,7 +231,7 @@ fn main() -> Result<()> {
             repo,
             onepassword,
             no_encrypt,
-        } => cmd_join(url, repo, onepassword, no_encrypt),
+        } => cmd_join(url, repo, onepassword, no_encrypt, &input),
         Cmd::Mcp => mcp::run_mcp_server(),
     }
 }
@@ -240,7 +243,12 @@ fn build_filter(max_age: Option<u64>, max_size: Option<u64>) -> ScanFilter {
     }
 }
 
-fn cmd_init(repo: Option<PathBuf>, op_ref: Option<String>, no_encrypt: bool) -> Result<()> {
+fn cmd_init(
+    repo: Option<PathBuf>,
+    op_ref: Option<String>,
+    no_encrypt: bool,
+    input: &dyn InputSource,
+) -> Result<()> {
     let config_path = Config::config_path()?;
     if config_path.exists() {
         bail!(
@@ -252,7 +260,7 @@ fn cmd_init(repo: Option<PathBuf>, op_ref: Option<String>, no_encrypt: bool) -> 
     let interactive = repo.is_none() && op_ref.is_none() && !no_encrypt;
 
     if interactive {
-        return cmd_init_interactive();
+        return cmd_init_interactive(input);
     }
 
     let repo = repo.unwrap_or_else(|| {
@@ -270,17 +278,15 @@ fn cmd_init(repo: Option<PathBuf>, op_ref: Option<String>, no_encrypt: bool) -> 
     init_with_options(repo, op_ref, enc_override, Default::default())
 }
 
-fn cmd_init_interactive() -> Result<()> {
+fn cmd_init_interactive(input: &dyn InputSource) -> Result<()> {
     println!("clync setup\n");
 
-    // 1. Sync repo path
     let default_repo = config::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("clync-repo");
-    let repo = prompt_with_default("sync repo path", &default_repo.to_string_lossy())?;
+    let repo = input.prompt_with_default("sync repo path", &default_repo.to_string_lossy())?;
     let repo = config::expand_path(&PathBuf::from(&repo));
 
-    // 2. Encryption method
     println!("\nencryption:");
     println!("  1) local key file (default, no dependencies)");
     println!("  2) passphrase (from env var, no key file needed)");
@@ -288,26 +294,27 @@ fn cmd_init_interactive() -> Result<()> {
     println!("  4) Bitwarden CLI (bw)");
     println!("  5) pass (Unix password manager)");
     println!("  6) none (plain text, use private repo)");
-    let enc_choice = prompt_with_default("choice [1-6]", "1")?;
+    let enc_choice = input.prompt_with_default("choice [1-6]", "1")?;
 
     let (op_ref, enc_override) = match enc_choice.trim() {
         "2" => {
-            let env_var = prompt_with_default("env var name for passphrase", "CLYNC_PASSPHRASE")?;
+            let env_var =
+                input.prompt_with_default("env var name for passphrase", "CLYNC_PASSPHRASE")?;
             println!("set {env_var} in your shell before running clync");
             (None, Some(EncryptionConfig::Passphrase { env_var }))
         }
         "3" => {
-            let reference =
-                prompt_with_default("1Password reference", "op://Personal/clync/age-secret-key")?;
+            let reference = input
+                .prompt_with_default("1Password reference", "op://Personal/clync/age-secret-key")?;
             (Some(reference), None)
         }
         "4" => {
-            let item_id = prompt("Bitwarden item ID or name")?;
-            let field = prompt_with_default("field name", "notes")?;
+            let item_id = input.prompt("Bitwarden item ID or name")?;
+            let field = input.prompt_with_default("field name", "notes")?;
             (None, Some(EncryptionConfig::Bitwarden { item_id, field }))
         }
         "5" => {
-            let entry = prompt_with_default("pass entry path", "clync/age-key")?;
+            let entry = input.prompt_with_default("pass entry path", "clync/age-key")?;
             (None, Some(EncryptionConfig::Pass { entry }))
         }
         "6" => {
@@ -317,12 +324,11 @@ fn cmd_init_interactive() -> Result<()> {
         _ => (None, None),
     };
 
-    // 3. Sync targets
     println!("\nwhat to sync (all on by default, disable what you don't want):");
-    let settings = prompt_yn("  sync settings.json?", true)?;
-    let commands = prompt_yn("  sync custom commands?", true)?;
-    let skills = prompt_yn("  sync custom skills?", true)?;
-    let claude_md = prompt_yn("  sync global CLAUDE.md?", true)?;
+    let settings = input.prompt_yn("  sync settings.json?", true)?;
+    let commands = input.prompt_yn("  sync custom commands?", true)?;
+    let skills = input.prompt_yn("  sync custom skills?", true)?;
+    let claude_md = input.prompt_yn("  sync global CLAUDE.md?", true)?;
 
     let targets = config::SyncTargets {
         sessions: true,
@@ -336,18 +342,18 @@ fn cmd_init_interactive() -> Result<()> {
     println!();
     init_with_options(repo.clone(), op_ref, enc_override, targets)?;
 
-    // 4. Git remote
     println!();
     println!("git remote setup:");
     println!("  1) create a new private GitHub repo (needs gh CLI)");
     println!("  2) add an existing remote URL");
     println!("  3) skip (local only for now)");
-    let remote_choice = prompt_with_default("choice [1-3]", "1")?;
+    let remote_choice = input.prompt_with_default("choice [1-3]", "1")?;
 
+    let git_storage = GitStorage::new(repo.clone());
     match remote_choice.trim() {
         "1" => {
-            let repo_name = prompt_with_default("github repo name", "clync-data")?;
-            let gh_result = Command::new("gh")
+            let repo_name = input.prompt_with_default("github repo name", "clync-data")?;
+            let gh_result = std::process::Command::new("gh")
                 .args([
                     "repo",
                     "create",
@@ -365,7 +371,7 @@ fn cmd_init_interactive() -> Result<()> {
                         "git@github.com:{}.git",
                         url.trim_start_matches("https://github.com/")
                     );
-                    run_git(&repo, &["remote", "add", "origin", &ssh_url])?;
+                    git_storage.add_remote(&ssh_url)?;
                 }
                 Ok(output) => {
                     eprintln!(
@@ -379,9 +385,9 @@ fn cmd_init_interactive() -> Result<()> {
             }
         }
         "2" => {
-            let remote_url = prompt("remote url (e.g. git@github.com:you/clync-data.git)")?;
+            let remote_url = input.prompt("remote url (e.g. git@github.com:you/clync-data.git)")?;
             if !remote_url.is_empty() {
-                run_git(&repo, &["remote", "add", "origin", &remote_url])?;
+                git_storage.add_remote(&remote_url)?;
                 println!("remote added: {remote_url}");
             }
         }
@@ -391,14 +397,12 @@ fn cmd_init_interactive() -> Result<()> {
         }
     }
 
-    // 5. First push
     println!();
-    let do_push = prompt_yn("do first push now?", true)?;
+    let do_push = input.prompt_yn("do first push now?", true)?;
     if do_push {
         let config = Config::load()?;
         let keys = Cipher::from_config(&config.encryption)?;
         let filter = ScanFilter::default();
-        let git_storage = GitStorage::new(repo.clone());
 
         repo_meta::RepoMeta::from_config(&config).save(&repo)?;
 
@@ -414,7 +418,7 @@ fn cmd_init_interactive() -> Result<()> {
         git_storage.commit(&format!("clync init ({total} files) from {machine}"))?;
 
         if git_storage.has_remote() {
-            let do_git_push = prompt_yn("git push to remote?", true)?;
+            let do_git_push = input.prompt_yn("git push to remote?", true)?;
             if do_git_push {
                 git_storage.push_remote()?;
                 println!("pushed to remote");
@@ -509,57 +513,13 @@ fn init_with_options(
     std::fs::create_dir_all(repo.join("sessions"))?;
 
     if !repo.join(".git").exists() {
-        Command::new("git")
-            .args(["init", "-b", "main"])
-            .current_dir(&repo)
-            .status()
-            .context("git init failed")?;
-
-        std::fs::write(repo.join(".gitignore"), ".clync.lock\n")?;
+        GitStorage::init_repo(&repo)?;
     }
 
     ensure_repo_readme(&config)?;
 
     println!("sync repo ready at {}", repo.display());
     Ok(())
-}
-
-fn prompt(label: &str) -> Result<String> {
-    use std::io::Write;
-    print!("{label}: ");
-    std::io::stdout().flush()?;
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    Ok(input.trim().to_string())
-}
-
-fn prompt_with_default(label: &str, default: &str) -> Result<String> {
-    use std::io::Write;
-    print!("{label} [{default}]: ");
-    std::io::stdout().flush()?;
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        Ok(default.to_string())
-    } else {
-        Ok(trimmed.to_string())
-    }
-}
-
-fn prompt_yn(label: &str, default: bool) -> Result<bool> {
-    use std::io::Write;
-    let hint = if default { "[Y/n]" } else { "[y/N]" };
-    print!("{label} {hint} ");
-    std::io::stdout().flush()?;
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    let trimmed = input.trim().to_lowercase();
-    if trimmed.is_empty() {
-        Ok(default)
-    } else {
-        Ok(trimmed.starts_with('y'))
-    }
 }
 
 pub struct PushOutput {
@@ -916,7 +876,7 @@ fn cmd_config(action: Option<ConfigAction>) -> Result<()> {
                 bail!("no config found. Run `clync init` first.");
             }
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
-            Command::new(&editor)
+            std::process::Command::new(&editor)
                 .arg(&path)
                 .status()
                 .with_context(|| format!("failed to open {editor}"))?;
@@ -977,6 +937,7 @@ fn cmd_join(
     repo: Option<PathBuf>,
     op_ref: Option<String>,
     no_encrypt: bool,
+    input: &dyn InputSource,
 ) -> Result<()> {
     let config_path = Config::config_path()?;
     if config_path.exists() {
@@ -993,33 +954,11 @@ fn cmd_join(
     });
 
     println!("cloning sync repo...");
-    let status = Command::new("git")
-        .args(["clone", &url, &repo.to_string_lossy()])
-        .status()
-        .context("git clone failed")?;
-    if !status.success() {
-        bail!("git clone failed");
-    }
+    let git_storage = GitStorage::clone_repo(&url, &repo)?;
 
     let has_files = repo.join("clync.toml").exists() || repo.join("manifest.json").exists();
     if !has_files {
-        let branches = Command::new("git")
-            .args(["branch", "-r"])
-            .current_dir(&repo)
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default();
-        for line in branches.lines() {
-            let branch = line.trim().trim_start_matches("origin/");
-            if branch == "HEAD" || branch.contains("->") {
-                continue;
-            }
-            let _ = Command::new("git")
-                .args(["checkout", branch])
-                .current_dir(&repo)
-                .status();
-            break;
-        }
+        git_storage.checkout_first_branch()?;
     }
 
     let meta = repo_meta::RepoMeta::load(&repo)?;
@@ -1044,12 +983,13 @@ fn cmd_join(
         .as_ref()
         .is_some_and(|m| m.encryption.method == "passphrase")
     {
-        let env_var = prompt_with_default("env var name for passphrase", "CLYNC_PASSPHRASE")?;
+        let env_var =
+            input.prompt_with_default("env var name for passphrase", "CLYNC_PASSPHRASE")?;
         EncryptionConfig::Passphrase { env_var }
     } else {
         println!("this repo requires an age key to decrypt");
         println!("provide the same key used on the other machine");
-        let key = prompt("paste age secret key (AGE-SECRET-KEY-...)")?;
+        let key = input.prompt("paste age secret key (AGE-SECRET-KEY-...)")?;
         let key_path = config_dir.join("key.txt");
         write_secret_file(&key_path, &format!("{key}\n"))?;
         EncryptionConfig::KeyFile { path: key_path }
@@ -1073,12 +1013,11 @@ fn cmd_join(
     config.save(&config_path)?;
     println!("config saved to {}", config_path.display());
 
-    let do_pull = prompt_yn("pull sessions now?", true)?;
+    let do_pull = input.prompt_yn("pull sessions now?", true)?;
     if do_pull {
         let cipher = Cipher::from_config(&config.encryption)?;
         let filter = ScanFilter::default();
-        let storage = GitStorage::new(repo);
-        let result = sync::pull(&config, &cipher, &filter, &storage)?;
+        let result = sync::pull(&config, &cipher, &filter, &git_storage)?;
         let extras = extras::pull_extras(&config, &cipher)?;
         println!(
             "pulled {} sessions, {} merged, {} extras",
@@ -1108,13 +1047,9 @@ fn ensure_repo_readme(config: &Config) -> Result<()> {
         EncryptionConfig::Passphrase { .. } => "Files are encrypted with age (passphrase-based).",
         _ => "Files are encrypted with age (key-based).",
     };
-    let repo_url = Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(&config.sync.repo)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    let storage = GitStorage::new(config.sync.repo.clone());
+    let repo_url = storage
+        .get_remote_url()
         .unwrap_or_else(|| "<this-repo-url>".to_string());
     std::fs::write(
         &path,
@@ -1188,25 +1123,4 @@ fn format_size(bytes: u64) -> String {
     } else {
         format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
     }
-}
-
-pub fn has_remote(repo: &std::path::Path) -> bool {
-    Command::new("git")
-        .args(["remote"])
-        .current_dir(repo)
-        .output()
-        .map(|o| !o.stdout.is_empty())
-        .unwrap_or(false)
-}
-
-pub fn run_git(repo: &std::path::Path, args: &[&str]) -> Result<()> {
-    let status = Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .status()
-        .with_context(|| format!("git {} failed", args.join(" ")))?;
-    if !status.success() {
-        bail!("git {} exited with {}", args.join(" "), status);
-    }
-    Ok(())
 }

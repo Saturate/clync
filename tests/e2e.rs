@@ -233,7 +233,12 @@ impl Machine {
             .spawn()
             .and_then(|mut child| {
                 use std::io::Write;
-                child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(input.as_bytes())
+                    .unwrap();
                 child.wait_with_output()
             })
             .unwrap();
@@ -1303,11 +1308,24 @@ fn mcp_list_sessions() {
     let env = TestEnv::new("mcp_list");
     let a = env.machine("a");
     a.init();
-    a.write_session("proj", "s1", &[&mode_entry(), &msg("m1", None, 100, "user", "test query match")]);
+    a.write_session(
+        "proj",
+        "s1",
+        &[
+            &mode_entry(),
+            &msg("m1", None, 100, "user", "test query match"),
+        ],
+    );
     a.push();
 
-    let resp = a.mcp_call("tools/call", r#"{"name":"list_sessions","arguments":{"query":"query match","limit":5}}"#);
-    assert!(resp.contains("test query match"), "should find session: {resp}");
+    let resp = a.mcp_call(
+        "tools/call",
+        r#"{"name":"list_sessions","arguments":{"query":"query match","limit":5}}"#,
+    );
+    assert!(
+        resp.contains("test query match"),
+        "should find session: {resp}"
+    );
 }
 
 #[test]
@@ -1315,14 +1333,24 @@ fn mcp_session_detail() {
     let env = TestEnv::new("mcp_detail");
     let a = env.machine("a");
     a.init();
-    a.write_session("proj", "s1", &[
-        &mode_entry(),
-        &msg("m1", None, 100, "user", "hello detail"),
-        &msg("m2", Some("m1"), 200, "assistant", "hi there"),
-    ]);
+    a.write_session(
+        "proj",
+        "s1",
+        &[
+            &mode_entry(),
+            &msg("m1", None, 100, "user", "hello detail"),
+            &msg("m2", Some("m1"), 200, "assistant", "hi there"),
+        ],
+    );
 
-    let resp = a.mcp_call("tools/call", r#"{"name":"session_detail","arguments":{"uuid":"s1","tail":5}}"#);
-    assert!(resp.contains("hello detail"), "should contain message: {resp}");
+    let resp = a.mcp_call(
+        "tools/call",
+        r#"{"name":"session_detail","arguments":{"uuid":"s1","tail":5}}"#,
+    );
+    assert!(
+        resp.contains("hello detail"),
+        "should contain message: {resp}"
+    );
     assert!(resp.contains("user_messages"), "should have stats: {resp}");
 }
 
@@ -1343,13 +1371,32 @@ fn mcp_sync_push_pull() {
     let env = TestEnv::new("mcp_push_pull");
     let a = env.machine("a");
     a.init();
-    a.write_session("proj", "s1", &[&mode_entry(), &msg("m1", None, 100, "user", "mcp push test")]);
+    a.write_session(
+        "proj",
+        "s1",
+        &[
+            &mode_entry(),
+            &msg("m1", None, 100, "user", "mcp push test"),
+        ],
+    );
 
-    let push_resp = a.mcp_call("tools/call", r#"{"name":"sync_push","arguments":{"git":false}}"#);
-    assert!(push_resp.contains("pushed"), "push should work: {push_resp}");
+    let push_resp = a.mcp_call(
+        "tools/call",
+        r#"{"name":"sync_push","arguments":{"git":false}}"#,
+    );
+    assert!(
+        push_resp.contains("pushed"),
+        "push should work: {push_resp}"
+    );
 
-    let pull_resp = a.mcp_call("tools/call", r#"{"name":"sync_pull","arguments":{"git":false}}"#);
-    assert!(pull_resp.contains("unchanged") || pull_resp.contains("pulled"), "pull should work: {pull_resp}");
+    let pull_resp = a.mcp_call(
+        "tools/call",
+        r#"{"name":"sync_pull","arguments":{"git":false}}"#,
+    );
+    assert!(
+        pull_resp.contains("unchanged") || pull_resp.contains("pulled"),
+        "pull should work: {pull_resp}"
+    );
 }
 
 #[test]
@@ -1360,7 +1407,10 @@ fn mcp_sync_log() {
     a.write_session("proj", "s1", &[&mode_entry()]);
     a.push();
 
-    let resp = a.mcp_call("tools/call", r#"{"name":"sync_log","arguments":{"limit":5}}"#);
+    let resp = a.mcp_call(
+        "tools/call",
+        r#"{"name":"sync_log","arguments":{"limit":5}}"#,
+    );
     assert!(resp.contains("push"), "log should contain push: {resp}");
 }
 
@@ -1371,7 +1421,10 @@ fn mcp_config_show() {
     a.init();
 
     let resp = a.mcp_call("tools/call", r#"{"name":"config_show","arguments":{}}"#);
-    assert!(resp.contains("sync repo") || resp.contains("none"), "should show config: {resp}");
+    assert!(
+        resp.contains("sync repo") || resp.contains("none"),
+        "should show config: {resp}"
+    );
 }
 
 #[test]
@@ -1380,22 +1433,52 @@ fn mcp_help() {
     let a = env.machine("a");
     a.init();
 
-    let resp = a.mcp_call("tools/call", r#"{"name":"help","arguments":{"topic":"all"}}"#);
+    let resp = a.mcp_call(
+        "tools/call",
+        r#"{"name":"help","arguments":{"topic":"all"}}"#,
+    );
     assert!(resp.contains("clync"), "help should mention clync: {resp}");
 
-    let resp2 = a.mcp_call("tools/call", r#"{"name":"help","arguments":{"topic":"setup"}}"#);
-    assert!(resp2.contains("init") || resp2.contains("setup"), "setup help: {resp2}");
+    let resp2 = a.mcp_call(
+        "tools/call",
+        r#"{"name":"help","arguments":{"topic":"setup"}}"#,
+    );
+    assert!(
+        resp2.contains("init") || resp2.contains("setup"),
+        "setup help: {resp2}"
+    );
 
-    let resp3 = a.mcp_call("tools/call", r#"{"name":"help","arguments":{"topic":"sync"}}"#);
-    assert!(resp3.contains("push") || resp3.contains("pull"), "sync help: {resp3}");
+    let resp3 = a.mcp_call(
+        "tools/call",
+        r#"{"name":"help","arguments":{"topic":"sync"}}"#,
+    );
+    assert!(
+        resp3.contains("push") || resp3.contains("pull"),
+        "sync help: {resp3}"
+    );
 
-    let resp4 = a.mcp_call("tools/call", r#"{"name":"help","arguments":{"topic":"mcp"}}"#);
-    assert!(resp4.contains("mcp") || resp4.contains("MCP"), "mcp help: {resp4}");
+    let resp4 = a.mcp_call(
+        "tools/call",
+        r#"{"name":"help","arguments":{"topic":"mcp"}}"#,
+    );
+    assert!(
+        resp4.contains("mcp") || resp4.contains("MCP"),
+        "mcp help: {resp4}"
+    );
 
-    let resp5 = a.mcp_call("tools/call", r#"{"name":"help","arguments":{"topic":"config"}}"#);
-    assert!(resp5.contains("config") || resp5.contains("toml"), "config help: {resp5}");
+    let resp5 = a.mcp_call(
+        "tools/call",
+        r#"{"name":"help","arguments":{"topic":"config"}}"#,
+    );
+    assert!(
+        resp5.contains("config") || resp5.contains("toml"),
+        "config help: {resp5}"
+    );
 
-    let resp6 = a.mcp_call("tools/call", r#"{"name":"help","arguments":{"topic":"list"}}"#);
+    let resp6 = a.mcp_call(
+        "tools/call",
+        r#"{"name":"help","arguments":{"topic":"list"}}"#,
+    );
     assert!(resp6.contains("list"), "list help: {resp6}");
 }
 
@@ -1406,7 +1489,10 @@ fn mcp_unknown_tool() {
     a.init();
 
     let resp = a.mcp_call("tools/call", r#"{"name":"nonexistent","arguments":{}}"#);
-    assert!(resp.contains("error") || resp.contains("unknown"), "should error: {resp}");
+    assert!(
+        resp.contains("error") || resp.contains("unknown"),
+        "should error: {resp}"
+    );
 }
 
 #[test]
@@ -1416,8 +1502,14 @@ fn mcp_session_detail_empty_uuid() {
     a.init();
     a.write_session("proj", "s1", &[&mode_entry()]);
 
-    let resp = a.mcp_call("tools/call", r#"{"name":"session_detail","arguments":{"uuid":""}}"#);
-    assert!(resp.contains("error") || resp.contains("required"), "empty uuid should error: {resp}");
+    let resp = a.mcp_call(
+        "tools/call",
+        r#"{"name":"session_detail","arguments":{"uuid":""}}"#,
+    );
+    assert!(
+        resp.contains("error") || resp.contains("required"),
+        "empty uuid should error: {resp}"
+    );
 }
 
 // ---- CLI edge cases ----
@@ -1462,7 +1554,10 @@ fn log_empty() {
     a.init();
 
     let out = a.run_ok(&["log"]);
-    assert!(out.contains("no sync history"), "should say no history: {out}");
+    assert!(
+        out.contains("no sync history"),
+        "should say no history: {out}"
+    );
 }
 
 #[test]
@@ -1470,7 +1565,11 @@ fn list_json_output() {
     let env = TestEnv::new("list_json");
     let a = env.machine("a");
     a.init();
-    a.write_session("proj", "s1", &[&mode_entry(), &msg("m1", None, 100, "user", "json test")]);
+    a.write_session(
+        "proj",
+        "s1",
+        &[&mode_entry(), &msg("m1", None, 100, "user", "json test")],
+    );
 
     let out = a.run_ok(&["list", "--json"]);
     assert!(out.contains("\"uuid\""), "should be JSON: {out}");
@@ -1491,10 +1590,17 @@ fn list_with_max_age() {
     let env = TestEnv::new("list_age");
     let a = env.machine("a");
     a.init();
-    a.write_session("proj", "s1", &[&mode_entry(), &msg("m1", None, 100, "user", "old session")]);
+    a.write_session(
+        "proj",
+        "s1",
+        &[&mode_entry(), &msg("m1", None, 100, "user", "old session")],
+    );
 
     let out = a.run_ok(&["list", "--max-age", "1"]);
-    assert!(out.contains("old session") || out.contains("no sessions"), "age filter: {out}");
+    assert!(
+        out.contains("old session") || out.contains("no sessions"),
+        "age filter: {out}"
+    );
 }
 
 #[test]
@@ -1505,7 +1611,10 @@ fn status_no_repo() {
     a.write_session("proj", "s1", &[&mode_entry()]);
 
     let out = a.run_ok(&["status"]);
-    assert!(out.contains("local only") || out.contains("push to sync"), "should show local only: {out}");
+    assert!(
+        out.contains("local only") || out.contains("push to sync"),
+        "should show local only: {out}"
+    );
 }
 
 #[test]
@@ -1525,7 +1634,10 @@ fn pull_empty_repo() {
     a.init();
 
     let out = a.run_ok(&["pull", "--no-git"]);
-    assert!(out.contains("0 new") || out.contains("unchanged"), "empty pull: {out}");
+    assert!(
+        out.contains("0 new") || out.contains("unchanged"),
+        "empty pull: {out}"
+    );
 }
 
 #[test]
@@ -1534,10 +1646,18 @@ fn init_already_exists() {
     let a = env.machine("a");
     a.init();
 
-    let out = a.run(&["init", "--no-encrypt", "--repo", a.sync_repo.to_str().unwrap()]);
+    let out = a.run(&[
+        "init",
+        "--no-encrypt",
+        "--repo",
+        a.sync_repo.to_str().unwrap(),
+    ]);
     assert!(!out.status.success(), "double init should fail");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("already exists"), "should say exists: {stderr}");
+    assert!(
+        stderr.contains("already exists"),
+        "should say exists: {stderr}"
+    );
 }
 
 #[test]
@@ -1553,7 +1673,11 @@ fn push_with_max_age_filter() {
     let env = TestEnv::new("push_age_filter");
     let a = env.machine("a");
     a.init();
-    a.write_session("proj", "s1", &[&mode_entry(), &msg("m1", None, 100, "user", "hi")]);
+    a.write_session(
+        "proj",
+        "s1",
+        &[&mode_entry(), &msg("m1", None, 100, "user", "hi")],
+    );
 
     let out = a.run_ok(&["push", "--no-git", "--max-age", "1"]);
     assert!(out.contains("sessions"), "should run with filter: {out}");
@@ -1564,7 +1688,11 @@ fn push_with_max_size_filter() {
     let env = TestEnv::new("push_size_filter");
     let a = env.machine("a");
     a.init();
-    a.write_session("proj", "s1", &[&mode_entry(), &msg("m1", None, 100, "user", "hi")]);
+    a.write_session(
+        "proj",
+        "s1",
+        &[&mode_entry(), &msg("m1", None, 100, "user", "hi")],
+    );
 
     let out = a.run_ok(&["push", "--no-git", "--max-size", "1000000"]);
     assert!(out.contains("1 sessions"), "should push within size: {out}");
