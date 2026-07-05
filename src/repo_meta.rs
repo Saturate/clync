@@ -83,3 +83,150 @@ impl RepoMeta {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn file_extension_none() {
+        let meta = RepoMeta {
+            version: 1,
+            encryption: EncryptionMeta {
+                method: "none".into(),
+                hint: None,
+            },
+            targets: TargetsMeta::default(),
+        };
+        assert_eq!(meta.file_extension(), "jsonl");
+    }
+
+    #[test]
+    fn file_extension_age() {
+        let meta = RepoMeta {
+            version: 1,
+            encryption: EncryptionMeta {
+                method: "key_file".into(),
+                hint: None,
+            },
+            targets: TargetsMeta::default(),
+        };
+        assert_eq!(meta.file_extension(), "age");
+    }
+
+    #[test]
+    fn save_and_load() {
+        let dir = std::env::temp_dir().join(format!("clync-meta-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let meta = RepoMeta {
+            version: 1,
+            encryption: EncryptionMeta {
+                method: "none".into(),
+                hint: None,
+            },
+            targets: TargetsMeta {
+                sessions: true,
+                memories: true,
+                settings: false,
+                commands: false,
+                skills: false,
+                global_claude_md: false,
+            },
+        };
+        meta.save(&dir).unwrap();
+
+        let loaded = RepoMeta::load(&dir).unwrap().unwrap();
+        assert_eq!(loaded.version, 1);
+        assert_eq!(loaded.encryption.method, "none");
+        assert!(loaded.targets.sessions);
+        assert!(!loaded.targets.settings);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_missing_returns_none() {
+        let result = RepoMeta::load(std::path::Path::new("/nonexistent")).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn from_config_onepassword() {
+        let config = Config {
+            sync: SyncConfig {
+                repo: PathBuf::from("/tmp"),
+                claude_dir: PathBuf::from("/tmp"),
+                include_companion_dirs: false,
+                auto_git: true,
+            },
+            encryption: EncryptionConfig::OnePassword {
+                reference: "op://vault/item".into(),
+            },
+            targets: SyncTargets::default(),
+        };
+        let meta = RepoMeta::from_config(&config);
+        assert_eq!(meta.encryption.method, "onepassword");
+        assert_eq!(meta.encryption.hint.unwrap(), "op://vault/item");
+    }
+
+    #[test]
+    fn from_config_bitwarden() {
+        let config = Config {
+            sync: SyncConfig {
+                repo: PathBuf::from("/tmp"),
+                claude_dir: PathBuf::from("/tmp"),
+                include_companion_dirs: false,
+                auto_git: true,
+            },
+            encryption: EncryptionConfig::Bitwarden {
+                item_id: "my-item".into(),
+                field: "notes".into(),
+            },
+            targets: SyncTargets::default(),
+        };
+        let meta = RepoMeta::from_config(&config);
+        assert_eq!(meta.encryption.method, "bitwarden");
+        assert_eq!(meta.encryption.hint.unwrap(), "my-item");
+    }
+
+    #[test]
+    fn from_config_pass() {
+        let config = Config {
+            sync: SyncConfig {
+                repo: PathBuf::from("/tmp"),
+                claude_dir: PathBuf::from("/tmp"),
+                include_companion_dirs: false,
+                auto_git: true,
+            },
+            encryption: EncryptionConfig::Pass {
+                entry: "clync/key".into(),
+            },
+            targets: SyncTargets::default(),
+        };
+        let meta = RepoMeta::from_config(&config);
+        assert_eq!(meta.encryption.method, "pass");
+        assert_eq!(meta.encryption.hint.unwrap(), "clync/key");
+    }
+
+    #[test]
+    fn from_config_passphrase() {
+        let config = Config {
+            sync: SyncConfig {
+                repo: PathBuf::from("/tmp"),
+                claude_dir: PathBuf::from("/tmp"),
+                include_companion_dirs: false,
+                auto_git: true,
+            },
+            encryption: EncryptionConfig::Passphrase {
+                env_var: "MY_PASS".into(),
+            },
+            targets: SyncTargets::default(),
+        };
+        let meta = RepoMeta::from_config(&config);
+        assert_eq!(meta.encryption.method, "passphrase");
+        assert!(meta.encryption.hint.is_none());
+    }
+}

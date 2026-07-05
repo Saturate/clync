@@ -109,15 +109,130 @@ pub fn git_remote_url(path: &str) -> Option<String> {
 pub fn normalize_remote(url: &str) -> String {
     let s = url.trim_end_matches('/').trim_end_matches(".git");
 
+    let s = s
+        .strip_prefix("ssh://")
+        .or_else(|| s.strip_prefix("https://"))
+        .or_else(|| s.strip_prefix("http://"))
+        .unwrap_or(s);
+
     if let Some(rest) = s.strip_prefix("git@") {
         return rest.replace(':', "/").to_lowercase();
     }
 
-    let s = s
-        .strip_prefix("https://")
-        .or_else(|| s.strip_prefix("http://"))
-        .or_else(|| s.strip_prefix("ssh://"))
-        .unwrap_or(s);
-
     s.to_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_project_dir_basic() {
+        assert_eq!(
+            decode_project_dir("-Users-akj-code-myapp"),
+            "/Users/akj/code/myapp"
+        );
+    }
+
+    #[test]
+    fn decode_project_dir_leading_dash() {
+        assert_eq!(decode_project_dir("code-myapp"), "/code/myapp");
+    }
+
+    #[test]
+    fn normalize_remote_ssh() {
+        assert_eq!(
+            normalize_remote("git@github.com:User/Repo.git"),
+            "github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn normalize_remote_https() {
+        assert_eq!(
+            normalize_remote("https://github.com/User/Repo.git"),
+            "github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn normalize_remote_http() {
+        assert_eq!(
+            normalize_remote("http://gitlab.com/Group/Project/"),
+            "gitlab.com/group/project"
+        );
+    }
+
+    #[test]
+    fn normalize_remote_ssh_prefix() {
+        assert_eq!(
+            normalize_remote("ssh://git@github.com/User/Repo.git"),
+            "github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn normalize_ssh_variants_match() {
+        let a = normalize_remote("git@github.com:User/Repo.git");
+        let b = normalize_remote("ssh://git@github.com/User/Repo.git");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn normalize_remote_plain() {
+        assert_eq!(normalize_remote("example.com/repo"), "example.com/repo");
+    }
+
+    #[test]
+    fn build_remote_map_with_mock() {
+        let dir = std::env::temp_dir().join(format!("clync-resolver-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("project-alpha")).unwrap();
+        std::fs::create_dir_all(dir.join("project-beta")).unwrap();
+
+        let remotes: HashMap<String, String> = [(
+            "/project/alpha".to_string(),
+            "git@github.com:user/alpha.git".to_string(),
+        )]
+        .into_iter()
+        .collect();
+
+        let map = build_remote_map_with(&dir, &|path: &str| remotes.get(path).cloned());
+
+        assert_eq!(map.len(), 1);
+        assert!(map.contains_key("github.com/user/alpha"));
+        assert_eq!(map.get("github.com/user/alpha").unwrap(), "project-alpha");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn build_remote_map_with_nonexistent_dir() {
+        let map = build_remote_map_with(Path::new("/nonexistent"), &|_| None);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn resolve_project_dir_by_suffix() {
+        let dir = std::env::temp_dir().join(format!("clync-resolve-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Users-someone-code-myproject")).unwrap();
+
+        let map = HashMap::new();
+        let result = resolve_project_dir("code-myproject", &map, &dir);
+        assert_eq!(result, Some("Users-someone-code-myproject".to_string()));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_project_dir_no_match_returns_denormalized() {
+        let dir =
+            std::env::temp_dir().join(format!("clync-resolve-nomatch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let map = HashMap::new();
+        let result = resolve_project_dir("some-project", &map, &dir);
+        assert!(result.is_some());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

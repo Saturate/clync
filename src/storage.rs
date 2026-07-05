@@ -239,3 +239,181 @@ impl StorageProvider for GitStorage {
         &self.repo_path
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("clync-storage-test")
+            .join(name)
+            .join(format!("{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).ok();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn init_repo_creates_git_dir() {
+        let dir = temp_dir("init_repo");
+        let repo_path = dir.join("repo");
+        let storage = GitStorage::init_repo(&repo_path).unwrap();
+        assert!(repo_path.join(".git").exists());
+        assert!(repo_path.join(".gitignore").exists());
+        assert_eq!(storage.root(), repo_path);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn init_repo_idempotent() {
+        let dir = temp_dir("init_idem");
+        let repo_path = dir.join("repo");
+        GitStorage::init_repo(&repo_path).unwrap();
+        GitStorage::init_repo(&repo_path).unwrap();
+        assert!(repo_path.join(".git").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_read_exists() {
+        let dir = temp_dir("write_read");
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        storage.write_file("test.txt", b"hello").unwrap();
+        assert!(storage.exists("test.txt"));
+        assert!(!storage.exists("missing.txt"));
+        let data = storage.read_file("test.txt").unwrap();
+        assert_eq!(data, b"hello");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_creates_subdirs() {
+        let dir = temp_dir("subdirs");
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        storage.write_file("a/b/c.txt", b"nested").unwrap();
+        assert!(storage.exists("a/b/c.txt"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_files_works() {
+        let dir = temp_dir("list_files");
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        storage.write_file("sessions/a.txt", b"a").unwrap();
+        storage.write_file("sessions/b.txt", b"b").unwrap();
+        let files = storage.list_files("sessions").unwrap();
+        assert_eq!(files.len(), 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_files_empty() {
+        let dir = temp_dir("list_empty");
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        let files = storage.list_files("nonexistent").unwrap();
+        assert!(files.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn has_remote_false_for_new_repo() {
+        let dir = temp_dir("no_remote");
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        assert!(!storage.has_remote());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn get_remote_url_none_for_new_repo() {
+        let dir = temp_dir("no_remote_url");
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        assert!(storage.get_remote_url().is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn add_remote_and_check() {
+        let dir = temp_dir("add_remote");
+        let bare = dir.join("bare.git");
+        std::process::Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .arg(&bare)
+            .output()
+            .unwrap();
+
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        storage.add_remote(bare.to_str().unwrap()).unwrap();
+        assert!(storage.has_remote());
+        assert!(storage.get_remote_url().is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lock_and_try_lock() {
+        let dir = temp_dir("lock");
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        let _lock = storage.lock().unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn set_git_test_author(repo: &Path) {
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@clync"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "test"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+    }
+
+    #[test]
+    fn commit_with_changes() {
+        let dir = temp_dir("commit");
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        set_git_test_author(storage.root());
+        storage.write_file("file.txt", b"content").unwrap();
+        storage.commit("test commit").unwrap();
+
+        let log = std::process::Command::new("git")
+            .args(["log", "--oneline"])
+            .current_dir(storage.root())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&log.stdout);
+        assert!(stdout.contains("test commit"), "log: {stdout}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn commit_no_changes_is_noop() {
+        let dir = temp_dir("commit_noop");
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        set_git_test_author(storage.root());
+        storage.write_file("file.txt", b"content").unwrap();
+        storage.commit("first").unwrap();
+        storage.commit("second should be noop").unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn pull_remote_no_remote_is_ok() {
+        let dir = temp_dir("pull_no_remote");
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        storage.pull_remote().unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn push_remote_no_remote_is_ok() {
+        let dir = temp_dir("push_no_remote");
+        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
+        storage.push_remote().unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

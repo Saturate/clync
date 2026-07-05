@@ -1,7 +1,7 @@
 mod config;
 mod crypto;
 mod extras;
-pub mod io;
+pub(crate) mod io;
 mod list;
 mod manifest;
 mod mcp;
@@ -10,7 +10,7 @@ mod parser;
 mod repo_meta;
 mod resolver;
 mod scanner;
-pub mod secret;
+pub(crate) mod secret;
 mod storage;
 mod sync;
 mod synclog;
@@ -298,13 +298,14 @@ fn cmd_init_interactive(input: &dyn InputSource) -> Result<()> {
 
     let (op_ref, enc_override) = match enc_choice.trim() {
         "2" => {
-            let env_var = input.prompt_with_default("env var name for passphrase", "CLYNC_PASSPHRASE")?;
+            let env_var =
+                input.prompt_with_default("env var name for passphrase", "CLYNC_PASSPHRASE")?;
             println!("set {env_var} in your shell before running clync");
             (None, Some(EncryptionConfig::Passphrase { env_var }))
         }
         "3" => {
-            let reference =
-                input.prompt_with_default("1Password reference", "op://Personal/clync/age-secret-key")?;
+            let reference = input
+                .prompt_with_default("1Password reference", "op://Personal/clync/age-secret-key")?;
             (Some(reference), None)
         }
         "4" => {
@@ -982,7 +983,8 @@ fn cmd_join(
         .as_ref()
         .is_some_and(|m| m.encryption.method == "passphrase")
     {
-        let env_var = input.prompt_with_default("env var name for passphrase", "CLYNC_PASSPHRASE")?;
+        let env_var =
+            input.prompt_with_default("env var name for passphrase", "CLYNC_PASSPHRASE")?;
         EncryptionConfig::Passphrase { env_var }
     } else {
         println!("this repo requires an age key to decrypt");

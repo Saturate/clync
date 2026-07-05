@@ -64,11 +64,7 @@ impl MockInput {
     }
 
     fn next_response(&self) -> String {
-        self.responses
-            .lock()
-            .unwrap()
-            .pop()
-            .unwrap_or_default()
+        self.responses.lock().unwrap().pop().unwrap_or_default()
     }
 }
 
@@ -94,5 +90,53 @@ impl InputSource for MockInput {
         } else {
             Ok(resp.to_lowercase().starts_with('y'))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mock_prompt_returns_responses_in_order() {
+        let mock = MockInput::new(vec!["first", "second", "third"]);
+        assert_eq!(mock.prompt("a").unwrap(), "first");
+        assert_eq!(mock.prompt("b").unwrap(), "second");
+        assert_eq!(mock.prompt("c").unwrap(), "third");
+    }
+
+    #[test]
+    fn mock_prompt_returns_empty_when_exhausted() {
+        let mock = MockInput::new(vec!["only"]);
+        assert_eq!(mock.prompt("a").unwrap(), "only");
+        assert_eq!(mock.prompt("b").unwrap(), "");
+    }
+
+    #[test]
+    fn mock_prompt_with_default_uses_default_on_empty() {
+        let mock = MockInput::new(vec!["", "custom"]);
+        assert_eq!(
+            mock.prompt_with_default("a", "fallback").unwrap(),
+            "fallback"
+        );
+        assert_eq!(mock.prompt_with_default("b", "fallback").unwrap(), "custom");
+    }
+
+    #[test]
+    fn mock_prompt_yn_defaults() {
+        let mock = MockInput::new(vec!["", ""]);
+        assert!(mock.prompt_yn("a", true).unwrap());
+        assert!(!mock.prompt_yn("b", false).unwrap());
+    }
+
+    #[test]
+    fn mock_prompt_yn_yes_no() {
+        let mock = MockInput::new(vec!["y", "yes", "Y", "n", "no", "N"]);
+        assert!(mock.prompt_yn("a", false).unwrap());
+        assert!(mock.prompt_yn("b", false).unwrap());
+        assert!(mock.prompt_yn("c", false).unwrap());
+        assert!(!mock.prompt_yn("d", true).unwrap());
+        assert!(!mock.prompt_yn("e", true).unwrap());
+        assert!(!mock.prompt_yn("f", true).unwrap());
     }
 }

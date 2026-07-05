@@ -66,3 +66,60 @@ impl SecretProvider for MockSecretProvider {
         Ok(self.secret.clone())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn mock_provider_returns_secret() {
+        let provider = MockSecretProvider::new("AGE-SECRET-KEY-TEST");
+        let config = EncryptionConfig::KeyFile {
+            path: PathBuf::from("/fake"),
+        };
+        assert_eq!(
+            provider.read_secret(&config).unwrap(),
+            "AGE-SECRET-KEY-TEST"
+        );
+    }
+
+    #[test]
+    fn cli_provider_key_file_not_found() {
+        let provider = CliSecretProvider;
+        let config = EncryptionConfig::KeyFile {
+            path: PathBuf::from("/nonexistent/key.txt"),
+        };
+        assert!(provider.read_secret(&config).is_err());
+    }
+
+    #[test]
+    fn cli_provider_passphrase_errors() {
+        let provider = CliSecretProvider;
+        let config = EncryptionConfig::Passphrase {
+            env_var: "UNUSED".into(),
+        };
+        assert!(provider.read_secret(&config).is_err());
+    }
+
+    #[test]
+    fn cli_provider_none_errors() {
+        let provider = CliSecretProvider;
+        let config = EncryptionConfig::None;
+        assert!(provider.read_secret(&config).is_err());
+    }
+
+    #[test]
+    fn cli_provider_reads_real_key_file() {
+        let dir = std::env::temp_dir().join(format!("clync-secret-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key_path = dir.join("test-key.txt");
+        std::fs::write(&key_path, "my-secret-key\n").unwrap();
+
+        let provider = CliSecretProvider;
+        let config = EncryptionConfig::KeyFile { path: key_path };
+        assert_eq!(provider.read_secret(&config).unwrap(), "my-secret-key");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
