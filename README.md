@@ -60,10 +60,10 @@ Or non-interactive for scripting:
 
 ```bash
 # With 1Password
-clync init --repo ~/clync-repo --onepassword "op://Personal/clync/age-secret-key"
+clync init --repo ~/.clync/data --onepassword "op://Personal/clync/age-secret-key"
 
 # With no encryption (use a private repo, but I still do not recommend this as sessions have a lot of senstive data.)
-clync init --repo ~/clync-repo --no-encrypt
+clync init --repo ~/.clync/data --no-encrypt
 ```
 
 ### Second machine
@@ -130,7 +130,7 @@ Config lives at `~/.config/clync/config.toml`:
 
 ```toml
 [sync]
-repo = "~/clync-repo"
+repo = "~/.clync/data"
 claude_dir = "~/.claude"
 include_companion_dirs = false
 auto_git = true

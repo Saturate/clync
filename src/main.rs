@@ -266,7 +266,8 @@ fn cmd_init(
     let repo = repo.unwrap_or_else(|| {
         config::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("clync-repo")
+            .join(".clync")
+            .join("data")
     });
 
     let enc_override = if no_encrypt {
@@ -283,7 +284,8 @@ fn cmd_init_interactive(input: &dyn InputSource) -> Result<()> {
 
     let default_repo = config::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("clync-repo");
+        .join(".clync")
+        .join("data");
     let repo = input.prompt_with_default("sync repo path", &default_repo.to_string_lossy())?;
     let repo = config::expand_path(&PathBuf::from(&repo));
 
@@ -950,7 +952,8 @@ fn cmd_join(
     let repo = repo.unwrap_or_else(|| {
         config::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("clync-repo")
+            .join(".clync")
+            .join("data")
     });
 
     println!("cloning sync repo...");
