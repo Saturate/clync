@@ -174,7 +174,13 @@ fn restore_file(src: &Path, dst: &Path, cipher: &Cipher) -> Result<u32> {
         }
     }
 
-    let plaintext = cipher.decrypt_file(src)?;
+    let plaintext = match cipher.decrypt_file(src) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("warning: could not decrypt {}: {e}", src.display());
+            return Ok(0);
+        }
+    };
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }

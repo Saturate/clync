@@ -256,9 +256,13 @@ pub fn pull(
                     r
                 }
             };
+            let action_desc = match action {
+                PullAction::New { uuid, rel_path, .. } => format!("{uuid} ({rel_path})"),
+                PullAction::Merge { uuid, rel_path, .. } => format!("{uuid} merge ({rel_path})"),
+            };
             match result {
                 Ok(()) => None,
-                Err(e) => Some(format!("{e}")),
+                Err(e) => Some(format!("{action_desc}: {e}")),
             }
         })
         .collect();

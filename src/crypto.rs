@@ -69,6 +69,7 @@ impl Cipher {
         let data =
             std::fs::read(src).with_context(|| format!("could not read {}", src.display()))?;
         self.decrypt(&data)
+            .with_context(|| format!("failed to decrypt {}", src.display()))
     }
 }
 
