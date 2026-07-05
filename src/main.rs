@@ -1017,6 +1017,7 @@ fn cmd_join(
     println!("config saved to {}", config_path.display());
 
     let do_pull = input.prompt_yn("pull sessions now?", true)?;
+    println!();
     if do_pull {
         let cipher = Cipher::from_config(&config.encryption)?;
         let filter = ScanFilter::default();
