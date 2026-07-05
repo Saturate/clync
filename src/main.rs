@@ -967,8 +967,15 @@ fn cmd_join(
             .join("data")
     });
 
-    println!("cloning sync repo...");
-    let git_storage = GitStorage::clone_repo(&url, &repo)?;
+    let git_storage = if repo.join(".git").exists() {
+        println!("sync repo already exists, pulling latest...");
+        let storage = GitStorage::new(repo.clone());
+        storage.pull_remote()?;
+        storage
+    } else {
+        println!("cloning sync repo...");
+        GitStorage::clone_repo(&url, &repo)?
+    };
 
     let has_files = repo.join("clync.toml").exists() || repo.join("manifest.json").exists();
     if !has_files {
