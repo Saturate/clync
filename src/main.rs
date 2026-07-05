@@ -1009,9 +1009,8 @@ fn cmd_join(
             "onepassword" => {
                 let use_op = input.prompt_yn(&format!("use 1Password ({hint})?"), true)?;
                 if use_op {
-                    EncryptionConfig::OnePassword {
-                        reference: hint.clone(),
-                    }
+                    let reference = input.prompt_with_default("1Password reference", hint)?;
+                    EncryptionConfig::OnePassword { reference }
                 } else {
                     prompt_manual_key(input, &config_dir)?
                 }
@@ -1053,14 +1052,25 @@ fn cmd_join(
     let do_pull = input.prompt_yn("pull sessions now?", true)?;
     println!();
     if do_pull {
-        let cipher = Cipher::from_config(&config.encryption)?;
-        let filter = ScanFilter::default();
-        let result = sync::pull(&config, &cipher, &filter, &git_storage)?;
-        let extras = extras::pull_extras(&config, &cipher)?;
-        println!(
-            "pulled {} sessions, {} merged, {} extras",
-            result.pulled, result.merged, extras.pulled
-        );
+        let pull_result = (|| -> Result<()> {
+            let cipher = Cipher::from_config(&config.encryption)?;
+            let filter = ScanFilter::default();
+            let result = sync::pull(&config, &cipher, &filter, &git_storage)?;
+            let extras = extras::pull_extras(&config, &cipher)?;
+            println!(
+                "pulled {} sessions, {} merged, {} extras",
+                result.pulled, result.merged, extras.pulled
+            );
+            Ok(())
+        })();
+
+        if let Err(e) = pull_result {
+            eprintln!("join failed: {e}");
+            eprintln!("cleaning up...");
+            std::fs::remove_dir_all(&config_dir).ok();
+            std::fs::remove_dir_all(&repo).ok();
+            bail!("join failed. check your encryption settings and try again.");
+        }
     }
 
     println!("\ndone. run `clync sync --git` to sync anytime.");
