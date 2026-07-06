@@ -20,6 +20,24 @@ jobs:
       - run: cargo test --workspace
       - run: cargo clippy --all-targets -- -D warnings -W clippy::too_many_lines
 
+  changeset:
+    name: Changeset
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for changeset
+        run: |
+          files=$(git diff --name-only origin/main...HEAD -- '.changeset/changesets/*.md')
+          if [ -z "$files" ]; then
+            echo "No changeset found. Add one with:"
+            echo "  cargo changeset add -p clync -b patch -c fixed -m \"Description\""
+            echo "  cargo changeset add -p clync -b none -c changed -m \"No user-facing changes\""
+            exit 1
+          fi
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

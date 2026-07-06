@@ -65,10 +65,18 @@ jobs:
         with:
           merge-multiple: true
 
+      - name: Extract changelog entry
+        id: changelog
+        run: |
+          changelog=$(awk '/^## /{if(found)exit; found=1; next} found{print}' CHANGELOG.md)
+          echo "body<<__CLYNC_CHANGELOG_EOF__" >> $GITHUB_OUTPUT
+          echo "$changelog" >> $GITHUB_OUTPUT
+          echo "__CLYNC_CHANGELOG_EOF__" >> $GITHUB_OUTPUT
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.body }}
           files: |
             clync-*.tar.gz
             clync-*.zip
