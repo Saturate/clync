@@ -161,6 +161,7 @@ mod tests {
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
                 auto_git: true,
+                git: Default::default(),
             },
             encryption: EncryptionConfig::OnePassword {
                 reference: "op://vault/item".into(),
@@ -180,6 +181,7 @@ mod tests {
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
                 auto_git: true,
+                git: Default::default(),
             },
             encryption: EncryptionConfig::Bitwarden {
                 item_id: "my-item".into(),
@@ -200,6 +202,7 @@ mod tests {
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
                 auto_git: true,
+                git: Default::default(),
             },
             encryption: EncryptionConfig::Pass {
                 entry: "clync/key".into(),
@@ -219,6 +222,7 @@ mod tests {
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
                 auto_git: true,
+                git: Default::default(),
             },
             encryption: EncryptionConfig::Passphrase {
                 env_var: "MY_PASS".into(),

@@ -26,6 +26,7 @@ Great for backup, and for people using more than one machine.
 | **Multi-machine** | `join` command for second machine setup |
 | **Key management** | Local key file, passphrase, 1Password, Bitwarden, pass, or none |
 | **Auto git** | Commits and pushes automatically by default |
+| **Git LFS** | Auto-tracks session files over 99 MB with git-lfs |
 
 ## Install
 
@@ -138,6 +139,9 @@ repo = "~/.clync/data"
 claude_dir = "~/.claude"
 include_companion_dirs = false
 auto_git = true
+
+[sync.git]
+lfs_threshold = 103809024  # auto-track sessions over 99MB with git-lfs (0 = disabled)
 
 [encryption]
 method = "onepassword"

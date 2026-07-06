@@ -433,11 +433,19 @@ fn call_tool(name: &str, args: &Value) -> Result<String> {
             };
             let t = &config.targets;
             Ok(format!(
-                "sync repo: {}\nclaude dir: {}\nencryption: {}\ncompanion dirs: {}\n\ntargets:\n  sessions: {}\n  memories: {}\n  settings: {}\n  commands: {}\n  skills: {}\n  global CLAUDE.md: {}",
+                "sync repo: {}\nclaude dir: {}\nencryption: {}\ncompanion dirs: {}\ngit lfs: {}\n\ntargets:\n  sessions: {}\n  memories: {}\n  settings: {}\n  commands: {}\n  skills: {}\n  global CLAUDE.md: {}",
                 config.sync.repo.display(),
                 config.sync.claude_dir.display(),
                 enc_method,
                 config.sync.include_companion_dirs,
+                if config.sync.git.lfs_threshold == 0 {
+                    "disabled".to_string()
+                } else {
+                    format!(
+                        "{}MB threshold",
+                        config.sync.git.lfs_threshold / (1024 * 1024)
+                    )
+                },
                 t.sessions,
                 t.memories,
                 t.settings,
@@ -538,6 +546,9 @@ Config location: ~/Library/Application Support/clync/config.toml (macOS)
 repo = '~/.clync/data'           # path to the git sync repo
 claude_dir = '~/.claude'         # claude code data directory
 include_companion_dirs = false   # sync subagent/tool-result dirs
+
+[sync.git]
+lfs_threshold = 103809024        # auto-track sessions over 99MB with git-lfs (0 = disabled)
 
 [encryption]
 method = 'key_file'              # or 'onepassword'

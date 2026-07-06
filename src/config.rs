@@ -18,6 +18,26 @@ pub struct SyncConfig {
     pub include_companion_dirs: bool,
     #[serde(default = "default_true")]
     pub auto_git: bool,
+    #[serde(default)]
+    pub git: GitConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GitConfig {
+    #[serde(default = "default_lfs_threshold")]
+    pub lfs_threshold: u64,
+}
+
+fn default_lfs_threshold() -> u64 {
+    99 * 1024 * 1024
+}
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self {
+            lfs_threshold: default_lfs_threshold(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -180,6 +200,7 @@ mod tests {
                 claude_dir: PathBuf::from("/home/user/.claude"),
                 include_companion_dirs: false,
                 auto_git: true,
+                git: Default::default(),
             },
             encryption: EncryptionConfig::None,
             targets: SyncTargets::default(),

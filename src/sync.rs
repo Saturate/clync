@@ -78,6 +78,27 @@ pub fn push(
         }
     }
 
+    let lfs_threshold = config.sync.git.lfs_threshold;
+    if lfs_threshold > 0 && push_count > 0 {
+        let root = storage.root();
+        for (uuid, _) in manifest.sessions.iter() {
+            let filename = session_filename(uuid, encrypted);
+            let path = root.join("sessions").join(&filename);
+            if let Ok(meta) = std::fs::metadata(&path)
+                && meta.len() >= lfs_threshold
+            {
+                let rel = format!("sessions/{filename}");
+                match crate::lfs::ensure_lfs_for_file(root, &rel) {
+                    Ok(()) => eprintln!(
+                        "lfs: tracking {rel} ({:.1} MB)",
+                        meta.len() as f64 / (1024.0 * 1024.0)
+                    ),
+                    Err(e) => eprintln!("warning: could not enable lfs for {rel}: {e}"),
+                }
+            }
+        }
+    }
+
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
     let manifest_data = cipher.encrypt(manifest_json.as_bytes())?;
     let tmp_manifest = format!("{manifest_rel}.tmp");

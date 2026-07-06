@@ -3,6 +3,7 @@ mod crypto;
 mod extras;
 pub(crate) mod fileutil;
 pub(crate) mod io;
+mod lfs;
 mod list;
 mod manifest;
 mod mcp;
@@ -519,6 +520,7 @@ fn init_with_options(
             claude_dir,
             include_companion_dirs: false,
             auto_git: true,
+            git: Default::default(),
         },
         encryption,
         targets,
@@ -908,6 +910,15 @@ fn cmd_config(action: Option<ConfigAction>) -> Result<()> {
             println!("encryption:      {enc_method}");
             println!("auto git:        {}", config.sync.auto_git);
             println!("companion dirs:  {}", config.sync.include_companion_dirs);
+            let lfs_display = if config.sync.git.lfs_threshold == 0 {
+                "disabled".to_string()
+            } else {
+                format!(
+                    "{}MB threshold",
+                    config.sync.git.lfs_threshold / (1024 * 1024)
+                )
+            };
+            println!("git lfs:         {lfs_display}");
             println!();
             println!("targets:");
             println!("  sessions:        {}", t.sessions);
@@ -956,27 +967,33 @@ fn cmd_config(action: Option<ConfigAction>) -> Result<()> {
 
 fn set_toml_value(table: &mut toml::Table, key: &str, value: &str) -> Result<()> {
     let parts: Vec<&str> = key.split('.').collect();
-    if parts.len() == 2 {
-        let section = table
-            .get_mut(parts[0])
-            .and_then(|v| v.as_table_mut())
-            .with_context(|| format!("section '{}' not found", parts[0]))?;
-
-        let parsed: toml::Value = if value == "true" {
-            toml::Value::Boolean(true)
-        } else if value == "false" {
-            toml::Value::Boolean(false)
-        } else if let Ok(n) = value.parse::<i64>() {
-            toml::Value::Integer(n)
-        } else {
-            toml::Value::String(value.to_string())
-        };
-
-        section.insert(parts[1].to_string(), parsed);
-        Ok(())
-    } else {
-        bail!("key must be in section.field format (e.g. targets.skills)")
+    if parts.len() < 2 {
+        bail!("key must be in section.field format (e.g. targets.skills, sync.git.lfs_threshold)");
     }
+
+    let field = parts[parts.len() - 1];
+    let mut current = table;
+    for &section in &parts[..parts.len() - 1] {
+        current = current
+            .get_mut(section)
+            .and_then(|v| v.as_table_mut())
+            .with_context(|| format!("section '{section}' not found"))?;
+    }
+
+    let parsed: toml::Value = if value == "true" {
+        toml::Value::Boolean(true)
+    } else if value == "false" {
+        toml::Value::Boolean(false)
+    } else if let Some(bytes) = parse_byte_size(value) {
+        toml::Value::Integer(bytes as i64)
+    } else if let Ok(n) = value.parse::<i64>() {
+        toml::Value::Integer(n)
+    } else {
+        toml::Value::String(value.to_string())
+    };
+
+    current.insert(field.to_string(), parsed);
+    Ok(())
 }
 
 fn cmd_join(
@@ -1092,6 +1109,7 @@ fn cmd_join(
             claude_dir,
             include_companion_dirs: false,
             auto_git: true,
+            git: Default::default(),
         },
         encryption,
         targets: Default::default(),
@@ -1273,6 +1291,20 @@ fn prompt_manual_key(
     let key_path = config_dir.join("key.txt");
     write_secret_file(&key_path, &format!("{key}\n"))?;
     Ok(EncryptionConfig::KeyFile { path: key_path })
+}
+
+fn parse_byte_size(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (num, suffix) = if s.ends_with("GB") || s.ends_with("gb") {
+        (s[..s.len() - 2].trim(), 1024 * 1024 * 1024)
+    } else if s.ends_with("MB") || s.ends_with("mb") {
+        (s[..s.len() - 2].trim(), 1024 * 1024)
+    } else if s.ends_with("KB") || s.ends_with("kb") {
+        (s[..s.len() - 2].trim(), 1024)
+    } else {
+        return None;
+    };
+    num.parse::<u64>().ok().map(|n| n * suffix)
 }
 
 fn auto_migrate_memories(config: &Config, cipher: &Cipher) {
