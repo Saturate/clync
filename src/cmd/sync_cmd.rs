@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::config::{Config, EncryptionConfig};
 use crate::crypto::Cipher;
 use crate::scanner::ScanFilter;
-use crate::storage::GitStorage;
+use crate::store::create_store;
 use crate::{extras, manifest, memories, repo_meta, sync, synclog};
 
 use super::init::ensure_repo_readme;
@@ -23,20 +23,22 @@ pub struct PullOutput {
     pub memories: u32,
 }
 
-pub fn do_push(use_git: bool) -> Result<PushOutput> {
+pub fn do_push(do_sync: bool) -> Result<PushOutput> {
     let config = Config::load()?;
     let cipher = Cipher::from_config(&config.encryption)?;
-    let storage = GitStorage::new(config.sync.repo.clone());
+    let store = create_store(&config)?;
 
     let (pushed, skipped, extras, mem) = {
-        let _lock = storage.try_lock()?;
+        let _lock = store.try_lock()?;
 
-        repo_meta::RepoMeta::from_config(&config).save(&config.sync.repo)?;
+        if let Some(path) = config.storage_path() {
+            repo_meta::RepoMeta::from_config(&config).save(path)?;
+        }
         ensure_repo_readme(&config)?;
         auto_migrate_memories(&config, &cipher);
 
         let filter = ScanFilter::default();
-        let result = sync::push(&config, &cipher, &filter, &storage)?;
+        let result = sync::push(&config, &cipher, &filter, store.as_ref())?;
         let extras_result = extras::push_extras(&config, &cipher)?;
         let mem_result = memories::push_memories(&config, &cipher)?;
 
@@ -44,10 +46,12 @@ pub fn do_push(use_git: bool) -> Result<PushOutput> {
         log.sessions_pushed = result.pushed;
         log.sessions_skipped = result.skipped;
         log.extras = extras_result.pushed + mem_result.pushed;
-        synclog::append(&config.sync.repo, &log).ok();
+        if let Some(path) = config.storage_path() {
+            synclog::append(path, &log).ok();
+        }
 
         let total_extra = extras_result.pushed + mem_result.pushed;
-        if use_git && (result.pushed > 0 || total_extra > 0) {
+        if do_sync && (result.pushed > 0 || total_extra > 0) {
             let machine = manifest::get_machine_id();
             let mut parts = Vec::new();
             if result.pushed > 0 {
@@ -56,7 +60,7 @@ pub fn do_push(use_git: bool) -> Result<PushOutput> {
             if total_extra > 0 {
                 parts.push(format!("{total_extra} extras"));
             }
-            storage.commit(&format!("clync push ({}) from {machine}", parts.join(", ")))?;
+            store.sync_up(&format!("clync push ({}) from {machine}", parts.join(", ")))?;
         }
 
         (
@@ -67,10 +71,6 @@ pub fn do_push(use_git: bool) -> Result<PushOutput> {
         )
     };
 
-    if use_git && (pushed > 0 || extras + mem > 0) {
-        storage.push_remote()?;
-    }
-
     Ok(PushOutput {
         sessions: pushed,
         skipped,
@@ -79,22 +79,22 @@ pub fn do_push(use_git: bool) -> Result<PushOutput> {
     })
 }
 
-pub fn do_pull(use_git: bool) -> Result<PullOutput> {
+pub fn do_pull(do_sync: bool) -> Result<PullOutput> {
     let config = Config::load()?;
-    let storage = GitStorage::new(config.sync.repo.clone());
+    let store = create_store(&config)?;
 
-    if use_git {
-        storage.pull_remote()?;
+    if do_sync {
+        store.sync_down()?;
     }
 
-    let (pulled, merged, skipped, extras, mem, should_commit) = {
-        let _lock = storage.try_lock()?;
+    let (pulled, merged, skipped, extras, mem) = {
+        let _lock = store.try_lock()?;
 
         let cipher = Cipher::from_config(&config.encryption)?;
         auto_migrate_memories(&config, &cipher);
 
         let filter = ScanFilter::default();
-        let result = sync::pull(&config, &cipher, &filter, &storage)?;
+        let result = sync::pull(&config, &cipher, &filter, store.as_ref())?;
         let extras_result = extras::pull_extras(&config, &cipher)?;
         let mem_result = memories::pull_memories(&config, &cipher)?;
 
@@ -103,16 +103,14 @@ pub fn do_pull(use_git: bool) -> Result<PullOutput> {
         log.sessions_merged = result.merged;
         log.sessions_skipped = result.skipped;
         log.extras = extras_result.pulled + mem_result.pulled;
-        synclog::append(&config.sync.repo, &log).ok();
+        if let Some(path) = config.storage_path() {
+            synclog::append(path, &log).ok();
+        }
 
-        let did_commit = if use_git {
+        if do_sync {
             let machine = manifest::get_machine_id();
-            storage
-                .commit(&format!("clync pull from {machine}"))
-                .is_ok()
-        } else {
-            false
-        };
+            store.sync_up(&format!("clync pull from {machine}")).ok();
+        }
 
         (
             result.pulled,
@@ -120,13 +118,8 @@ pub fn do_pull(use_git: bool) -> Result<PullOutput> {
             result.skipped,
             extras_result.pulled,
             mem_result.pulled,
-            did_commit,
         )
     };
-
-    if use_git && should_commit {
-        storage.push_remote().ok();
-    }
 
     Ok(PullOutput {
         pulled,
@@ -137,20 +130,22 @@ pub fn do_pull(use_git: bool) -> Result<PullOutput> {
     })
 }
 
-pub fn cmd_push(no_git: bool, filter: ScanFilter) -> Result<()> {
+pub fn cmd_push(no_sync: bool, filter: ScanFilter) -> Result<()> {
     let config = Config::load()?;
     let cipher = Cipher::from_config(&config.encryption)?;
-    let storage = GitStorage::new(config.sync.repo.clone());
-    let use_git = config.sync.auto_git && !no_git;
+    let store = create_store(&config)?;
+    let do_sync = config.sync.storage.auto_push() && !no_sync;
 
-    let should_push = {
-        let _lock = storage.lock()?;
+    {
+        let _lock = store.lock()?;
 
-        repo_meta::RepoMeta::from_config(&config).save(&config.sync.repo)?;
+        if let Some(path) = config.storage_path() {
+            repo_meta::RepoMeta::from_config(&config).save(path)?;
+        }
         ensure_repo_readme(&config)?;
         auto_migrate_memories(&config, &cipher);
 
-        let result = sync::push(&config, &cipher, &filter, &storage)?;
+        let result = sync::push(&config, &cipher, &filter, store.as_ref())?;
         let verb = if matches!(config.encryption, EncryptionConfig::None) {
             "synced"
         } else {
@@ -175,10 +170,12 @@ pub fn cmd_push(no_git: bool, filter: ScanFilter) -> Result<()> {
         log.sessions_pushed = result.pushed;
         log.sessions_skipped = result.skipped;
         log.extras = extras_result.pushed + mem_result.pushed;
-        synclog::append(&config.sync.repo, &log).ok();
+        if let Some(path) = config.storage_path() {
+            synclog::append(path, &log).ok();
+        }
 
         let total_extra = extras_result.pushed + mem_result.pushed;
-        if use_git && (result.pushed > 0 || total_extra > 0) {
+        if do_sync && (result.pushed > 0 || total_extra > 0) {
             let machine = manifest::get_machine_id();
             let mut parts = Vec::new();
             if result.pushed > 0 {
@@ -187,36 +184,29 @@ pub fn cmd_push(no_git: bool, filter: ScanFilter) -> Result<()> {
             if total_extra > 0 {
                 parts.push(format!("{total_extra} extras"));
             }
-            storage.commit(&format!("clync push ({}) from {machine}", parts.join(", ")))?;
-            true
-        } else {
-            false
+            store.sync_up(&format!("clync push ({}) from {machine}", parts.join(", ")))?;
         }
-    };
-
-    if should_push {
-        storage.push_remote()?;
     }
 
     Ok(())
 }
 
-pub fn cmd_pull(no_git: bool, filter: ScanFilter) -> Result<()> {
+pub fn cmd_pull(no_sync: bool, filter: ScanFilter) -> Result<()> {
     let config = Config::load()?;
-    let storage = GitStorage::new(config.sync.repo.clone());
-    let use_git = config.sync.auto_git && !no_git;
+    let store = create_store(&config)?;
+    let do_sync = config.sync.storage.auto_push() && !no_sync;
 
-    if use_git {
-        storage.pull_remote()?;
+    if do_sync {
+        store.sync_down()?;
     }
 
-    let should_push = {
-        let _lock = storage.lock()?;
+    {
+        let _lock = store.lock()?;
 
         let cipher = Cipher::from_config(&config.encryption)?;
         auto_migrate_memories(&config, &cipher);
 
-        let result = sync::pull(&config, &cipher, &filter, &storage)?;
+        let result = sync::pull(&config, &cipher, &filter, store.as_ref())?;
         println!(
             "pull: {} new, {} merged, {} unchanged",
             result.pulled, result.merged, result.skipped
@@ -237,20 +227,14 @@ pub fn cmd_pull(no_git: bool, filter: ScanFilter) -> Result<()> {
         log.sessions_merged = result.merged;
         log.sessions_skipped = result.skipped;
         log.extras = extras_result.pulled + mem_result.pulled;
-        synclog::append(&config.sync.repo, &log).ok();
-
-        if use_git {
-            let machine = manifest::get_machine_id();
-            storage
-                .commit(&format!("clync pull from {machine}"))
-                .is_ok()
-        } else {
-            false
+        if let Some(path) = config.storage_path() {
+            synclog::append(path, &log).ok();
         }
-    };
 
-    if should_push {
-        storage.push_remote().ok();
+        if do_sync {
+            let machine = manifest::get_machine_id();
+            store.sync_up(&format!("clync pull from {machine}")).ok();
+        }
     }
 
     Ok(())
@@ -259,8 +243,8 @@ pub fn cmd_pull(no_git: bool, filter: ScanFilter) -> Result<()> {
 pub fn cmd_status(filter: ScanFilter) -> Result<()> {
     let config = Config::load()?;
     let cipher = Cipher::from_config(&config.encryption)?;
-    let storage = GitStorage::new(config.sync.repo.clone());
-    let result = sync::status(&config, &cipher, &filter, &storage)?;
+    let store = create_store(&config)?;
+    let result = sync::status(&config, &cipher, &filter, store.as_ref())?;
 
     let total_diff = result.local_only.len() + result.remote_only.len() + result.diverged.len();
     if total_diff == 0 {
@@ -312,7 +296,11 @@ pub fn cmd_status(filter: ScanFilter) -> Result<()> {
 }
 
 pub(crate) fn auto_migrate_memories(config: &Config, cipher: &Cipher) {
-    let old_dir = config.sync.repo.join("extras").join("memories");
+    let store_path = match config.storage_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let old_dir = store_path.join("extras").join("memories");
     if !old_dir.exists() {
         return;
     }

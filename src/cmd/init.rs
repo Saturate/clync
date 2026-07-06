@@ -1,17 +1,18 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
-use crate::config::{self, Config, EncryptionConfig, SyncConfig};
+use crate::config::{self, Config, EncryptionConfig, StorageConfig, SyncConfig};
 use crate::crypto::Cipher;
 use crate::io::InputSource;
 use crate::scanner::ScanFilter;
-use crate::storage::GitStorage;
+use crate::store::git::GitStore;
 use crate::{extras, manifest, memories, repo_meta, sync};
 
 pub fn cmd_init(
     repo: Option<PathBuf>,
     op_ref: Option<String>,
     no_encrypt: bool,
+    storage_type: &str,
     input: &dyn InputSource,
 ) -> Result<()> {
     let config_path = Config::config_path()?;
@@ -22,7 +23,7 @@ pub fn cmd_init(
         );
     }
 
-    let interactive = repo.is_none() && op_ref.is_none() && !no_encrypt;
+    let interactive = repo.is_none() && op_ref.is_none() && !no_encrypt && storage_type == "git";
 
     if interactive {
         return cmd_init_interactive(input);
@@ -41,18 +42,47 @@ pub fn cmd_init(
         None
     };
 
-    init_with_options(repo, op_ref, enc_override, Default::default())
+    let storage = match storage_type {
+        "folder" => StorageConfig::Folder { path: repo },
+        #[cfg(feature = "s3")]
+        "s3" => {
+            bail!(
+                "S3 storage requires configuration fields (bucket, region, etc.) that cannot be set via CLI flags. Use interactive init or edit config.toml directly."
+            );
+        }
+        #[cfg(not(feature = "s3"))]
+        "s3" => {
+            bail!("S3 storage is not available. Rebuild with: cargo install clync --features s3");
+        }
+        "git" => StorageConfig::Git {
+            path: repo,
+            auto_push: true,
+            lfs_threshold: config::default_lfs_threshold(),
+        },
+        other => {
+            bail!("unknown storage type: {other}. Valid options: git, folder, s3");
+        }
+    };
+
+    init_with_options(storage, op_ref, enc_override, Default::default())
 }
 
 fn cmd_init_interactive(input: &dyn InputSource) -> Result<()> {
     println!("clync setup\n");
 
+    println!("storage backend:");
+    println!("  1) git (default, syncs via git remote)");
+    println!("  2) folder (local/network folder, NAS, Dropbox, USB)");
+    let storage_choice = input.prompt_with_default("choice [1-2]", "1")?;
+
     let default_repo = config::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".clync")
         .join("data");
-    let repo = input.prompt_with_default("sync repo path", &default_repo.to_string_lossy())?;
+    let repo = input.prompt_with_default("sync path", &default_repo.to_string_lossy())?;
     let repo = config::expand_path(&PathBuf::from(&repo));
+
+    let is_folder = storage_choice.trim() == "2";
 
     println!("\nencryption:");
     println!("  1) local key file (default, no dependencies)");
@@ -106,96 +136,111 @@ fn cmd_init_interactive(input: &dyn InputSource) -> Result<()> {
         global_claude_md: claude_md,
     };
 
-    println!();
-    init_with_options(repo.clone(), op_ref, enc_override, targets)?;
+    let storage = if is_folder {
+        StorageConfig::Folder { path: repo.clone() }
+    } else {
+        StorageConfig::Git {
+            path: repo.clone(),
+            auto_push: true,
+            lfs_threshold: config::default_lfs_threshold(),
+        }
+    };
 
     println!();
-    println!("git remote setup:");
-    println!("  1) create a new private GitHub repo (needs gh CLI)");
-    println!("  2) add an existing remote URL");
-    println!("  3) skip (local only for now)");
-    let remote_choice = input.prompt_with_default("choice [1-3]", "1")?;
+    init_with_options(storage, op_ref, enc_override, targets)?;
 
-    let git_storage = GitStorage::new(repo.clone());
-    match remote_choice.trim() {
-        "1" => {
-            let repo_name = input.prompt_with_default("github repo name", "clync-data")?;
-            let gh_result = std::process::Command::new("gh")
-                .args([
-                    "repo",
-                    "create",
-                    &repo_name,
-                    "--private",
-                    "--description",
-                    "Encrypted Claude Code sync (managed by clync)",
-                ])
-                .output();
-            match gh_result {
-                Ok(output) if output.status.success() => {
-                    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    println!("created: {url}");
-                    let ssh_url = format!(
-                        "git@github.com:{}.git",
-                        url.trim_start_matches("https://github.com/")
-                    );
-                    git_storage.add_remote(&ssh_url)?;
-                }
-                Ok(output) => {
-                    eprintln!(
-                        "gh repo create failed: {}",
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    );
-                }
-                Err(_) => {
-                    eprintln!("gh CLI not found. Install with: brew install gh");
+    if !is_folder {
+        println!();
+        println!("git remote setup:");
+        println!("  1) create a new private GitHub repo (needs gh CLI)");
+        println!("  2) add an existing remote URL");
+        println!("  3) skip (local only for now)");
+        let remote_choice = input.prompt_with_default("choice [1-3]", "1")?;
+
+        let git_store = GitStore::new(repo.clone());
+        match remote_choice.trim() {
+            "1" => {
+                let repo_name = input.prompt_with_default("github repo name", "clync-data")?;
+                let gh_result = std::process::Command::new("gh")
+                    .args([
+                        "repo",
+                        "create",
+                        &repo_name,
+                        "--private",
+                        "--description",
+                        "Encrypted Claude Code sync (managed by clync)",
+                    ])
+                    .output();
+                match gh_result {
+                    Ok(output) if output.status.success() => {
+                        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        println!("created: {url}");
+                        let ssh_url = format!(
+                            "git@github.com:{}.git",
+                            url.trim_start_matches("https://github.com/")
+                        );
+                        git_store.add_remote(&ssh_url)?;
+                    }
+                    Ok(output) => {
+                        eprintln!(
+                            "gh repo create failed: {}",
+                            String::from_utf8_lossy(&output.stderr).trim()
+                        );
+                    }
+                    Err(_) => {
+                        eprintln!("gh CLI not found. Install with: brew install gh");
+                    }
                 }
             }
-        }
-        "2" => {
-            let remote_url = input.prompt("remote url (e.g. git@github.com:you/clync-data.git)")?;
-            if !remote_url.is_empty() {
-                git_storage.add_remote(&remote_url)?;
-                println!("remote added: {remote_url}");
+            "2" => {
+                let remote_url =
+                    input.prompt("remote url (e.g. git@github.com:you/clync-data.git)")?;
+                if !remote_url.is_empty() {
+                    git_store.add_remote(&remote_url)?;
+                    println!("remote added: {remote_url}");
+                }
+            }
+            _ => {
+                println!("skipped. add a remote later with:");
+                println!("  cd {} && git remote add origin <url>", repo.display());
             }
         }
-        _ => {
-            println!("skipped. add a remote later with:");
-            println!("  cd {} && git remote add origin <url>", repo.display());
+
+        println!();
+        let do_push = input.prompt_yn("do first push now?", true)?;
+        if do_push {
+            let config = Config::load()?;
+            let keys = Cipher::from_config(&config.encryption)?;
+            let filter = ScanFilter::default();
+
+            if let Some(path) = config.storage_path() {
+                repo_meta::RepoMeta::from_config(&config).save(path)?;
+            }
+
+            let result = sync::push(&config, &keys, &filter, &git_store)?;
+            let extras = extras::push_extras(&config, &keys)?;
+            let mem = memories::push_memories(&config, &keys)?;
+            println!(
+                "synced {} sessions, {} extras",
+                result.pushed,
+                extras.pushed + mem.pushed
+            );
+
+            let machine = manifest::get_machine_id();
+            let total = result.pushed + extras.pushed + mem.pushed;
+            git_store.commit(&format!("clync init ({total} files) from {machine}"))?;
+
+            if git_store.has_remote() {
+                let do_git_push = input.prompt_yn("git push to remote?", true)?;
+                if do_git_push {
+                    git_store.push_remote()?;
+                    println!("pushed to remote");
+                }
+            }
         }
     }
 
-    println!();
-    let do_push = input.prompt_yn("do first push now?", true)?;
-    if do_push {
-        let config = Config::load()?;
-        let keys = Cipher::from_config(&config.encryption)?;
-        let filter = ScanFilter::default();
-
-        repo_meta::RepoMeta::from_config(&config).save(&repo)?;
-
-        let result = sync::push(&config, &keys, &filter, &git_storage)?;
-        let extras = extras::push_extras(&config, &keys)?;
-        let mem = memories::push_memories(&config, &keys)?;
-        println!(
-            "synced {} sessions, {} extras",
-            result.pushed,
-            extras.pushed + mem.pushed
-        );
-
-        let machine = manifest::get_machine_id();
-        let total = result.pushed + extras.pushed + mem.pushed;
-        git_storage.commit(&format!("clync init ({total} files) from {machine}"))?;
-
-        if git_storage.has_remote() {
-            let do_git_push = input.prompt_yn("git push to remote?", true)?;
-            if do_git_push {
-                git_storage.push_remote()?;
-                println!("pushed to remote");
-            }
-        }
-    }
-
-    println!("\ndone. run `clync sync --git` to sync anytime.");
+    println!("\ndone. run `clync push` to sync anytime.");
     println!("add to Claude Code MCP config for in-session access:");
     println!("  clync config path  # shows config location");
     println!("  see `clync mcp` for MCP server setup");
@@ -204,7 +249,7 @@ fn cmd_init_interactive(input: &dyn InputSource) -> Result<()> {
 }
 
 fn init_with_options(
-    repo: PathBuf,
+    storage: StorageConfig,
     op_ref: Option<String>,
     enc_override: Option<EncryptionConfig>,
     targets: config::SyncTargets,
@@ -265,13 +310,28 @@ fn init_with_options(
         EncryptionConfig::KeyFile { path: key_path }
     };
 
+    if let Some(path) = storage.local_path() {
+        std::fs::create_dir_all(path.join("sessions"))?;
+    }
+
+    match &storage {
+        StorageConfig::Git { path, .. } => {
+            if !path.join(".git").exists() {
+                GitStore::init_repo(path)?;
+            }
+        }
+        StorageConfig::Folder { path } => {
+            std::fs::create_dir_all(path)?;
+        }
+        #[cfg(feature = "s3")]
+        StorageConfig::S3 { .. } => {}
+    }
+
     let config = Config {
         sync: SyncConfig {
-            repo: repo.clone(),
             claude_dir,
             include_companion_dirs: false,
-            auto_git: true,
-            git: Default::default(),
+            storage,
         },
         encryption,
         targets,
@@ -280,15 +340,13 @@ fn init_with_options(
     config.save(&config_path)?;
     println!("config saved to {}", config_path.display());
 
-    std::fs::create_dir_all(repo.join("sessions"))?;
-
-    if !repo.join(".git").exists() {
-        GitStorage::init_repo(&repo)?;
-    }
-
     ensure_repo_readme(&config)?;
 
-    println!("sync repo ready at {}", repo.display());
+    if let Some(path) = config.storage_path() {
+        println!("sync store ready at {}", path.display());
+    } else {
+        println!("sync store ready");
+    }
     Ok(())
 }
 
@@ -301,12 +359,14 @@ pub fn cmd_reset(keep_repo: bool, yes: bool, input: &dyn InputSource) -> Result<
 
     let config = Config::load()?;
     let config_dir = Config::config_dir()?;
-    let repo_path = &config.sync.repo;
 
     println!("this will remove:");
     println!("  config: {}", config_dir.display());
-    if !keep_repo && repo_path.exists() {
-        println!("  sync repo: {}", repo_path.display());
+    if let Some(repo_path) = config.storage_path()
+        && !keep_repo
+        && repo_path.exists()
+    {
+        println!("  sync store: {}", repo_path.display());
     }
     println!();
     println!("sessions in ~/.claude will NOT be touched");
@@ -319,7 +379,10 @@ pub fn cmd_reset(keep_repo: bool, yes: bool, input: &dyn InputSource) -> Result<
         }
     }
 
-    if !keep_repo && repo_path.exists() {
+    if let Some(repo_path) = config.storage_path()
+        && !keep_repo
+        && repo_path.exists()
+    {
         std::fs::remove_dir_all(repo_path)
             .with_context(|| format!("could not remove {}", repo_path.display()))?;
         println!("removed {}", repo_path.display());
@@ -366,7 +429,10 @@ pub(crate) fn write_secret_file(path: &std::path::Path, content: &str) -> Result
 }
 
 pub(crate) fn ensure_repo_readme(config: &Config) -> Result<()> {
-    let path = config.sync.repo.join("README.md");
+    let path = match config.storage_path() {
+        Some(p) => p.join("README.md"),
+        None => return Ok(()),
+    };
     if path.exists() {
         return Ok(());
     }
@@ -375,11 +441,38 @@ pub(crate) fn ensure_repo_readme(config: &Config) -> Result<()> {
         EncryptionConfig::Passphrase { .. } => "Files are encrypted with age (passphrase-based).",
         _ => "Files are encrypted with age (key-based).",
     };
-    let storage = GitStorage::new(config.sync.repo.clone());
-    let ssh_url = storage
-        .get_remote_url()
-        .unwrap_or_else(|| "<this-repo-url>".to_string());
-    let https_url = ssh_to_https(&ssh_url);
+
+    let setup_note = if config.sync.storage.is_git() {
+        let git_store = GitStore::new(
+            config
+                .storage_path()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf(),
+        );
+        let ssh_url = git_store
+            .get_remote_url()
+            .unwrap_or_else(|| "<this-repo-url>".to_string());
+        let https_url = ssh_to_https(&ssh_url);
+        format!(
+            "## Setup on another machine\n\n\
+             ```bash\n\
+             cargo install clync\n\n\
+             # SSH\n\
+             clync join {ssh_url}\n\n\
+             # HTTPS\n\
+             clync join {https_url}\n\
+             ```"
+        )
+    } else {
+        "## Setup on another machine\n\n\
+         Mount this folder on the other machine, then:\n\n\
+         ```bash\n\
+         cargo install clync\n\
+         clync init --storage folder --repo /path/to/this/folder\n\
+         ```"
+        .to_string()
+    };
+
     std::fs::write(
         &path,
         format!(
@@ -387,14 +480,7 @@ pub(crate) fn ensure_repo_readme(config: &Config) -> Result<()> {
              This repo is managed by [clync](https://github.com/Saturate/clync) \
              and contains synced Claude Code data.\n\n\
              {enc_note}\n\n\
-             ## Setup on another machine\n\n\
-             ```bash\n\
-             cargo install clync\n\n\
-             # SSH\n\
-             clync join {ssh_url}\n\n\
-             # HTTPS\n\
-             clync join {https_url}\n\
-             ```\n\n\
+             {setup_note}\n\n\
              See `clync.toml` for sync configuration.\n"
         ),
     )?;

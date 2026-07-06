@@ -12,32 +12,106 @@ pub struct Config {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncConfig {
-    pub repo: PathBuf,
     pub claude_dir: PathBuf,
     #[serde(default)]
     pub include_companion_dirs: bool,
-    #[serde(default = "default_true")]
-    pub auto_git: bool,
-    #[serde(default)]
-    pub git: GitConfig,
+    pub storage: StorageConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GitConfig {
-    #[serde(default = "default_lfs_threshold")]
-    pub lfs_threshold: u64,
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum StorageConfig {
+    #[serde(rename = "git")]
+    Git {
+        path: PathBuf,
+        #[serde(default = "default_true")]
+        auto_push: bool,
+        #[serde(default = "default_lfs_threshold")]
+        lfs_threshold: u64,
+    },
+    #[serde(rename = "folder")]
+    Folder { path: PathBuf },
+    #[cfg(feature = "s3")]
+    #[serde(rename = "s3")]
+    S3 {
+        bucket: String,
+        #[serde(default)]
+        prefix: String,
+        region: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret_key: Option<String>,
+    },
 }
 
-fn default_lfs_threshold() -> u64 {
-    99 * 1024 * 1024
-}
-
-impl Default for GitConfig {
-    fn default() -> Self {
-        Self {
-            lfs_threshold: default_lfs_threshold(),
+impl std::fmt::Debug for StorageConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StorageConfig::Git {
+                path,
+                auto_push,
+                lfs_threshold,
+            } => f
+                .debug_struct("Git")
+                .field("path", path)
+                .field("auto_push", auto_push)
+                .field("lfs_threshold", lfs_threshold)
+                .finish(),
+            StorageConfig::Folder { path } => f.debug_struct("Folder").field("path", path).finish(),
+            #[cfg(feature = "s3")]
+            StorageConfig::S3 {
+                bucket,
+                prefix,
+                region,
+                endpoint,
+                ..
+            } => f
+                .debug_struct("S3")
+                .field("bucket", bucket)
+                .field("prefix", prefix)
+                .field("region", region)
+                .field("endpoint", endpoint)
+                .field("access_key", &"[REDACTED]")
+                .field("secret_key", &"[REDACTED]")
+                .finish(),
         }
     }
+}
+
+impl StorageConfig {
+    pub fn local_path(&self) -> Option<&Path> {
+        match self {
+            StorageConfig::Git { path, .. } => Some(path),
+            StorageConfig::Folder { path } => Some(path),
+            #[cfg(feature = "s3")]
+            StorageConfig::S3 { .. } => None,
+        }
+    }
+
+    pub fn is_git(&self) -> bool {
+        matches!(self, StorageConfig::Git { .. })
+    }
+
+    pub fn auto_push(&self) -> bool {
+        match self {
+            StorageConfig::Git { auto_push, .. } => *auto_push,
+            _ => false,
+        }
+    }
+
+    pub fn lfs_threshold(&self) -> u64 {
+        match self {
+            StorageConfig::Git { lfs_threshold, .. } => *lfs_threshold,
+            _ => 0,
+        }
+    }
+}
+
+pub fn default_lfs_threshold() -> u64 {
+    99 * 1024 * 1024
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -109,7 +183,13 @@ impl Config {
             .with_context(|| format!("could not read config at {}", path.display()))?;
         let mut config: Config = toml::from_str(&contents).context("invalid config format")?;
 
-        config.sync.repo = expand_path(&config.sync.repo);
+        match &mut config.sync.storage {
+            StorageConfig::Git { path, .. } | StorageConfig::Folder { path } => {
+                *path = expand_path(path);
+            }
+            #[cfg(feature = "s3")]
+            StorageConfig::S3 { .. } => {}
+        }
         config.sync.claude_dir = expand_path(&config.sync.claude_dir);
         if let EncryptionConfig::KeyFile { ref mut path } = config.encryption {
             *path = expand_path(path);
@@ -129,6 +209,10 @@ impl Config {
 
     pub fn claude_projects_dir(&self) -> PathBuf {
         self.sync.claude_dir.join("projects")
+    }
+
+    pub fn storage_path(&self) -> Option<&Path> {
+        self.sync.storage.local_path()
     }
 }
 
@@ -196,11 +280,13 @@ mod tests {
 
         let config = Config {
             sync: SyncConfig {
-                repo: PathBuf::from("/tmp/repo"),
                 claude_dir: PathBuf::from("/home/user/.claude"),
                 include_companion_dirs: false,
-                auto_git: true,
-                git: Default::default(),
+                storage: StorageConfig::Git {
+                    path: PathBuf::from("/tmp/repo"),
+                    auto_push: true,
+                    lfs_threshold: default_lfs_threshold(),
+                },
             },
             encryption: EncryptionConfig::None,
             targets: SyncTargets::default(),
@@ -211,6 +297,36 @@ mod tests {
         let loaded: Config = toml::from_str(&contents).unwrap();
         assert!(matches!(loaded.encryption, EncryptionConfig::None));
         assert!(loaded.targets.sessions);
+        assert!(loaded.sync.storage.is_git());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn folder_config_roundtrip() {
+        let dir =
+            std::env::temp_dir().join(format!("clync-folder-config-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+
+        let config = Config {
+            sync: SyncConfig {
+                claude_dir: PathBuf::from("/home/user/.claude"),
+                include_companion_dirs: false,
+                storage: StorageConfig::Folder {
+                    path: PathBuf::from("/mnt/nas/clync"),
+                },
+            },
+            encryption: EncryptionConfig::None,
+            targets: SyncTargets::default(),
+        };
+
+        config.save(&path).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let loaded: Config = toml::from_str(&contents).unwrap();
+        assert!(matches!(loaded.sync.storage, StorageConfig::Folder { .. }));
+        assert!(!loaded.sync.storage.is_git());
+        assert!(!loaded.sync.storage.auto_push());
 
         std::fs::remove_dir_all(&dir).ok();
     }

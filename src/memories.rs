@@ -24,7 +24,14 @@ pub fn push_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPushRes
     }
 
     let claude_dir = &config.sync.claude_dir;
-    let memories_dir = config.sync.repo.join("memories");
+    let store_path = match config.storage_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("warning: memories sync is not supported with S3 storage");
+            return Ok(MemoriesPushResult { pushed: 0 });
+        }
+    };
+    let memories_dir = store_path.join("memories");
     let enc = is_encrypted(config);
 
     let projects_dir = claude_dir.join("projects");
@@ -57,7 +64,11 @@ pub fn pull_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPullRes
     }
 
     let claude_dir = &config.sync.claude_dir;
-    let memories_dir = config.sync.repo.join("memories");
+    let store_path = match config.storage_path() {
+        Some(p) => p,
+        None => return Ok(MemoriesPullResult { pulled: 0 }),
+    };
+    let memories_dir = store_path.join("memories");
     if !memories_dir.exists() {
         return Ok(MemoriesPullResult { pulled: 0 });
     }
@@ -86,12 +97,16 @@ pub fn pull_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPullRes
 }
 
 pub fn migrate_from_extras(config: &Config, cipher: &Cipher) -> Result<(u32, u32)> {
-    let extras_memories = config.sync.repo.join("extras").join("memories");
+    let store_path = match config.storage_path() {
+        Some(p) => p,
+        None => return Ok((0, 0)),
+    };
+    let extras_memories = store_path.join("extras").join("memories");
     if !extras_memories.exists() {
         return Ok((0, 0));
     }
 
-    let new_memories_dir = config.sync.repo.join("memories");
+    let new_memories_dir = store_path.join("memories");
     let enc = is_encrypted(config);
     let mut projects = 0u32;
     let mut files = 0u32;

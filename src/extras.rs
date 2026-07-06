@@ -8,9 +8,24 @@ use crate::fileutil::{
 };
 
 pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult> {
+    let store_path = match config.storage_path() {
+        Some(p) => p,
+        None => {
+            let has_extras = config.targets.settings
+                || config.targets.commands
+                || config.targets.skills
+                || config.targets.global_claude_md;
+            if has_extras {
+                eprintln!(
+                    "warning: extras sync (settings, commands, skills) is not supported with S3 storage"
+                );
+            }
+            return Ok(ExtrasPushResult { pushed: 0 });
+        }
+    };
     let claude_dir = &config.sync.claude_dir;
     let targets = &config.targets;
-    let extras_dir = config.sync.repo.join("extras");
+    let extras_dir = store_path.join("extras");
     let enc = is_encrypted(config);
 
     let mut pushed = 0u32;
@@ -55,9 +70,13 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
 }
 
 pub fn pull_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPullResult> {
+    let store_path = match config.storage_path() {
+        Some(p) => p,
+        None => return Ok(ExtrasPullResult { pulled: 0 }),
+    };
     let claude_dir = &config.sync.claude_dir;
     let targets = &config.targets;
-    let extras_dir = config.sync.repo.join("extras");
+    let extras_dir = store_path.join("extras");
     let enc = is_encrypted(config);
 
     if !extras_dir.exists() {

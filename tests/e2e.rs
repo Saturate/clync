@@ -1675,7 +1675,7 @@ fn push_no_changes() {
     let a = env.machine("a");
     a.init();
 
-    let out = a.run_ok(&["push", "--no-git"]);
+    let out = a.run_ok(&["push", "--no-sync"]);
     assert!(out.contains("0 sessions"), "no sessions to push: {out}");
 }
 
@@ -1685,7 +1685,7 @@ fn pull_empty_repo() {
     let a = env.machine("a");
     a.init();
 
-    let out = a.run_ok(&["pull", "--no-git"]);
+    let out = a.run_ok(&["pull", "--no-sync"]);
     assert!(
         out.contains("0 new") || out.contains("unchanged"),
         "empty pull: {out}"
@@ -1731,7 +1731,7 @@ fn push_with_max_age_filter() {
         &[&mode_entry(), &msg("m1", None, 100, "user", "hi")],
     );
 
-    let out = a.run_ok(&["push", "--no-git", "--max-age", "1"]);
+    let out = a.run_ok(&["push", "--no-sync", "--max-age", "1"]);
     assert!(out.contains("sessions"), "should run with filter: {out}");
 }
 
@@ -1746,9 +1746,44 @@ fn push_with_max_size_filter() {
         &[&mode_entry(), &msg("m1", None, 100, "user", "hi")],
     );
 
-    let out = a.run_ok(&["push", "--no-git", "--max-size", "1000000"]);
+    let out = a.run_ok(&["push", "--no-sync", "--max-size", "1000000"]);
     assert!(out.contains("1 sessions"), "should push within size: {out}");
 
-    let out2 = a.run_ok(&["push", "--no-git", "--max-size", "10"]);
+    let out2 = a.run_ok(&["push", "--no-sync", "--max-size", "10"]);
     assert!(out2.contains("0 sessions"), "should skip large: {out2}");
+}
+
+#[test]
+fn folder_storage_init_and_push() {
+    let env = TestEnv::new("folder_storage");
+    let a = env.machine("a");
+
+    a.run_ok(&[
+        "init",
+        "--no-encrypt",
+        "--storage",
+        "folder",
+        "--repo",
+        a.sync_repo.to_str().unwrap(),
+    ]);
+
+    assert!(!a.sync_repo.join(".git").exists(), "no .git for folder");
+    assert!(
+        a.sync_repo.join("sessions").exists(),
+        "sessions dir created"
+    );
+
+    a.write_session(
+        "proj",
+        "s1",
+        &[&mode_entry(), &msg("m1", None, 100, "user", "hello folder")],
+    );
+
+    let out = a.run_ok(&["push", "--no-sync"]);
+    assert!(out.contains("1 sessions"), "push output: {out}");
+
+    assert!(
+        a.sync_repo.join("manifest.json").exists(),
+        "manifest written"
+    );
 }

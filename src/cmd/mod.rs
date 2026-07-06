@@ -69,7 +69,10 @@ pub fn cmd_list(
 
 pub fn cmd_log(limit: usize, json: bool) -> Result<()> {
     let config = Config::load()?;
-    let entries = synclog::read_recent(&config.sync.repo, limit)?;
+    let store_path = config.storage_path().ok_or_else(|| {
+        anyhow::anyhow!("log requires local storage (not available with S3 backend)")
+    })?;
+    let entries = synclog::read_recent(store_path, limit)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&entries)?);
@@ -128,20 +131,33 @@ pub fn cmd_config(action: Option<super::ConfigAction>) -> Result<()> {
                 EncryptionConfig::None => "none (plain text)".into(),
             };
             let t = &config.targets;
-            println!("sync repo:       {}", config.sync.repo.display());
+            let storage_desc = match &config.sync.storage {
+                crate::config::StorageConfig::Git {
+                    path, auto_push, ..
+                } => {
+                    format!("git ({}), auto_push: {auto_push}", path.display())
+                }
+                crate::config::StorageConfig::Folder { path } => {
+                    format!("folder ({})", path.display())
+                }
+                #[cfg(feature = "s3")]
+                crate::config::StorageConfig::S3 { bucket, region, .. } => {
+                    format!("s3 ({bucket}, {region})")
+                }
+            };
+            println!("storage:         {storage_desc}");
             println!("claude dir:      {}", config.sync.claude_dir.display());
             println!("encryption:      {enc_method}");
-            println!("auto git:        {}", config.sync.auto_git);
             println!("companion dirs:  {}", config.sync.include_companion_dirs);
-            let lfs_display = if config.sync.git.lfs_threshold == 0 {
-                "disabled".to_string()
-            } else {
-                format!(
-                    "{}MB threshold",
-                    config.sync.git.lfs_threshold / (1024 * 1024)
-                )
-            };
-            println!("git lfs:         {lfs_display}");
+            if config.sync.storage.is_git() {
+                let lfs = config.sync.storage.lfs_threshold();
+                let lfs_display = if lfs == 0 {
+                    "disabled".to_string()
+                } else {
+                    format!("{}MB threshold", lfs / (1024 * 1024))
+                };
+                println!("git lfs:         {lfs_display}");
+            }
             println!();
             println!("targets:");
             println!("  sessions:        {}", t.sessions);

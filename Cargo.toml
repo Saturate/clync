@@ -8,6 +8,10 @@ repository = "https://github.com/Saturate/clync"
 keywords = ["claude", "claude-code", "sync", "encryption", "age"]
 categories = ["command-line-utilities"]
 
+[features]
+default = []
+s3 = ["rust-s3"]
+
 [dependencies]
 age = { version = "0.11", features = ["armor"] }
 anyhow = "1"
@@ -22,6 +26,7 @@ toml = "0.8"
 fs2 = "0.4"
 rayon = "1"
 walkdir = "2"
+rust-s3 = { version = "0.35", optional = true, default-features = false, features = ["sync-native-tls", "fail-on-err"] }
 
 [dev-dependencies]
 filetime = "0.2"
