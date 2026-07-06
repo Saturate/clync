@@ -25,9 +25,6 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
 
     let mut pushed = 0u32;
 
-    if targets.memories {
-        pushed += sync_project_memories(claude_dir, &extras_dir, cipher, enc)?;
-    }
     if targets.settings {
         pushed += sync_file_if_changed(
             &claude_dir.join("settings.json"),
@@ -79,9 +76,6 @@ pub fn pull_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPullResult>
 
     let mut pulled = 0u32;
 
-    if targets.memories {
-        pulled += restore_project_memories(claude_dir, &extras_dir, cipher)?;
-    }
     if targets.settings {
         pulled += restore_file(
             &extras_dir.join(encrypted_name("settings.json", enc)),
@@ -223,54 +217,6 @@ fn restore_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Result<
         let original_name = rel.strip_suffix(".age").unwrap_or(&rel);
         let dst = dst_dir.join(original_name);
         count += restore_file(entry.path(), &dst, cipher)?;
-    }
-    Ok(count)
-}
-
-fn sync_project_memories(
-    claude_dir: &Path,
-    extras_dir: &Path,
-    cipher: &Cipher,
-    encrypted: bool,
-) -> Result<u32> {
-    let projects_dir = claude_dir.join("projects");
-    if !projects_dir.exists() {
-        return Ok(0);
-    }
-    let mut count = 0u32;
-    for project_entry in std::fs::read_dir(&projects_dir)? {
-        let project_entry = project_entry?;
-        if !project_entry.path().is_dir() {
-            continue;
-        }
-        let memory_dir = project_entry.path().join("memory");
-        if !memory_dir.exists() {
-            continue;
-        }
-        let project_name = project_entry.file_name().to_string_lossy().to_string();
-        let dst_dir = extras_dir.join("memories").join(&project_name);
-        count += sync_directory(&memory_dir, &dst_dir, cipher, encrypted)?;
-    }
-    Ok(count)
-}
-
-fn restore_project_memories(claude_dir: &Path, extras_dir: &Path, cipher: &Cipher) -> Result<u32> {
-    let memories_dir = extras_dir.join("memories");
-    if !memories_dir.exists() {
-        return Ok(0);
-    }
-    let mut count = 0u32;
-    for project_entry in std::fs::read_dir(&memories_dir)? {
-        let project_entry = project_entry?;
-        if !project_entry.path().is_dir() {
-            continue;
-        }
-        let project_name = project_entry.file_name().to_string_lossy().to_string();
-        let dst_dir = claude_dir
-            .join("projects")
-            .join(&project_name)
-            .join("memory");
-        count += restore_directory(&project_entry.path(), &dst_dir, cipher)?;
     }
     Ok(count)
 }
