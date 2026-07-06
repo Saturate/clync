@@ -135,6 +135,37 @@ impl GitStorage {
         Ok(())
     }
 
+    pub fn setup_lfs(&self) -> Result<()> {
+        let output = std::process::Command::new("git")
+            .args(["lfs", "version"])
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {}
+            _ => bail!(
+                "git-lfs is not installed. Install it first:\n  \
+                 brew install git-lfs   # macOS\n  \
+                 apt install git-lfs    # Debian/Ubuntu"
+            ),
+        }
+
+        self.run_git(&["lfs", "install", "--local"])?;
+
+        let attr_path = self.repo_path.join(".gitattributes");
+        let pattern = "sessions/** filter=lfs diff=lfs merge=lfs -text";
+        if attr_path.exists() {
+            let content = std::fs::read_to_string(&attr_path)?;
+            if content.contains(pattern) {
+                return Ok(());
+            }
+            let mut file = std::fs::OpenOptions::new().append(true).open(&attr_path)?;
+            std::io::Write::write_all(&mut file, format!("\n{pattern}\n").as_bytes())?;
+        } else {
+            std::fs::write(&attr_path, format!("{pattern}\n"))?;
+        }
+
+        Ok(())
+    }
+
     pub fn commit(&self, message: &str) -> Result<()> {
         self.run_git(&["add", "-A"])?;
 

@@ -433,11 +433,12 @@ fn call_tool(name: &str, args: &Value) -> Result<String> {
             };
             let t = &config.targets;
             Ok(format!(
-                "sync repo: {}\nclaude dir: {}\nencryption: {}\ncompanion dirs: {}\n\ntargets:\n  sessions: {}\n  memories: {}\n  settings: {}\n  commands: {}\n  skills: {}\n  global CLAUDE.md: {}",
+                "sync repo: {}\nclaude dir: {}\nencryption: {}\ncompanion dirs: {}\nlfs: {}\n\ntargets:\n  sessions: {}\n  memories: {}\n  settings: {}\n  commands: {}\n  skills: {}\n  global CLAUDE.md: {}",
                 config.sync.repo.display(),
                 config.sync.claude_dir.display(),
                 enc_method,
                 config.sync.include_companion_dirs,
+                config.sync.git.lfs,
                 t.sessions,
                 t.memories,
                 t.settings,
@@ -538,6 +539,9 @@ Config location: ~/Library/Application Support/clync/config.toml (macOS)
 repo = '~/.clync/data'           # path to the git sync repo
 claude_dir = '~/.claude'         # claude code data directory
 include_companion_dirs = false   # sync subagent/tool-result dirs
+
+[sync.git]
+lfs = false                      # use git-lfs for session files
 
 [encryption]
 method = 'key_file'              # or 'onepassword'

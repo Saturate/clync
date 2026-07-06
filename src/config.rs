@@ -18,6 +18,14 @@ pub struct SyncConfig {
     pub include_companion_dirs: bool,
     #[serde(default = "default_true")]
     pub auto_git: bool,
+    #[serde(default)]
+    pub git: GitConfig,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct GitConfig {
+    #[serde(default)]
+    pub lfs: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -180,6 +188,7 @@ mod tests {
                 claude_dir: PathBuf::from("/home/user/.claude"),
                 include_companion_dirs: false,
                 auto_git: true,
+                git: Default::default(),
             },
             encryption: EncryptionConfig::None,
             targets: SyncTargets::default(),

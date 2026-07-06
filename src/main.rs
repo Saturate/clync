@@ -519,6 +519,7 @@ fn init_with_options(
             claude_dir,
             include_companion_dirs: false,
             auto_git: true,
+            git: Default::default(),
         },
         encryption,
         targets,
@@ -534,6 +535,12 @@ fn init_with_options(
     }
 
     ensure_repo_readme(&config)?;
+
+    if config.sync.git.lfs {
+        let storage = GitStorage::new(repo.clone());
+        storage.setup_lfs()?;
+        println!("git-lfs enabled for sessions");
+    }
 
     println!("sync repo ready at {}", repo.display());
     Ok(())
@@ -556,6 +563,7 @@ pub fn do_push(use_git: bool) -> Result<PushOutput> {
 
         repo_meta::RepoMeta::from_config(&config).save(&config.sync.repo)?;
         ensure_repo_readme(&config)?;
+        ensure_lfs(&config, &storage);
         auto_migrate_memories(&config, &cipher);
 
         let filter = ScanFilter::default();
@@ -667,6 +675,7 @@ fn cmd_push(no_git: bool, filter: ScanFilter) -> Result<()> {
 
     repo_meta::RepoMeta::from_config(&config).save(&config.sync.repo)?;
     ensure_repo_readme(&config)?;
+    ensure_lfs(&config, &storage);
     auto_migrate_memories(&config, &cipher);
 
     let result = sync::push(&config, &cipher, &filter, &storage)?;
@@ -908,6 +917,7 @@ fn cmd_config(action: Option<ConfigAction>) -> Result<()> {
             println!("encryption:      {enc_method}");
             println!("auto git:        {}", config.sync.auto_git);
             println!("companion dirs:  {}", config.sync.include_companion_dirs);
+            println!("lfs:             {}", config.sync.git.lfs);
             println!();
             println!("targets:");
             println!("  sessions:        {}", t.sessions);
@@ -1092,6 +1102,7 @@ fn cmd_join(
             claude_dir,
             include_companion_dirs: false,
             auto_git: true,
+            git: Default::default(),
         },
         encryption,
         targets: Default::default(),
@@ -1273,6 +1284,31 @@ fn prompt_manual_key(
     let key_path = config_dir.join("key.txt");
     write_secret_file(&key_path, &format!("{key}\n"))?;
     Ok(EncryptionConfig::KeyFile { path: key_path })
+}
+
+fn ensure_lfs(config: &Config, storage: &GitStorage) {
+    if !config.sync.git.lfs {
+        return;
+    }
+    let attr_path = config.sync.repo.join(".gitattributes");
+    let already_setup = attr_path.exists()
+        && std::fs::read_to_string(&attr_path)
+            .map(|c| c.contains("filter=lfs"))
+            .unwrap_or(false);
+    if already_setup {
+        return;
+    }
+    match storage.setup_lfs() {
+        Ok(()) => {
+            eprintln!("git-lfs configured for sessions");
+            eprintln!(
+                "  to migrate existing large files, run:\n  \
+                 cd {} && git lfs migrate import --include=\"sessions/**\" --everything",
+                config.sync.repo.display()
+            );
+        }
+        Err(e) => eprintln!("warning: could not set up git-lfs: {e}"),
+    }
 }
 
 fn auto_migrate_memories(config: &Config, cipher: &Cipher) {
