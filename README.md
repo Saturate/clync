@@ -189,9 +189,13 @@ extras/
   CLAUDE.md.age         # encrypted global instructions
   commands/             # encrypted custom commands
   skills/               # encrypted custom skills
-  memories/
-    <project>/          # encrypted project memories
+memories/
+  <project>/            # encrypted project memories (normalized paths)
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, changeset workflow, and project structure.
 
 ## License
 

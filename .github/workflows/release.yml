@@ -2,16 +2,6 @@ name: Release
 
 on:
   workflow_dispatch:
-    inputs:
-      bump:
-        description: "Version bump type"
-        required: true
-        default: "patch"
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
 
 jobs:
   release:
@@ -32,37 +22,56 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-changeset
+        run: cargo install cargo-changeset --version 0.1.7
+
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Check for pending changesets
+        run: |
+          status=$(cargo changeset status 2>&1)
+          if echo "$status" | grep -q "No pending changesets"; then
+            echo "No changesets to release"
+            exit 1
+          fi
+          echo "$status"
+
       - name: Get current version
-        id: current
+        id: before
         run: |
           version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "version=$version" >> $GITHUB_OUTPUT
 
-      - name: Bump version
-        id: bump
+      - name: Release
+        id: release
+        env:
+          OLD_VERSION: ${{ steps.before.outputs.version }}
         run: |
-          IFS='.' read -r major minor patch <<< "${{ steps.current.outputs.version }}"
-          case "${{ inputs.bump }}" in
-            major) major=$((major + 1)); minor=0; patch=0 ;;
-            minor) minor=$((minor + 1)); patch=0 ;;
-            patch) patch=$((patch + 1)) ;;
-          esac
-          new_version="${major}.${minor}.${patch}"
-          echo "version=$new_version" >> $GITHUB_OUTPUT
-
-          sed -i "0,/^version = .*/s//version = \"${new_version}\"/" Cargo.toml
+          cargo changeset release --no-tags
           cargo check 2>/dev/null || true
+          version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ -z "$version" ]; then
+            echo "Failed to extract version from Cargo.toml" >&2
+            exit 1
+          fi
+          if [ "$version" = "$OLD_VERSION" ]; then
+            echo "Version unchanged ($version) - only none-bump changesets. Nothing to release."
+            exit 1
+          fi
+          echo "version=$version" >> $GITHUB_OUTPUT
 
       - name: Commit and tag
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          git add Cargo.toml Cargo.lock
-          git commit -m "release: v${{ steps.bump.outputs.version }}"
-          git tag "v${{ steps.bump.outputs.version }}"
+          git add Cargo.toml Cargo.lock CHANGELOG.md .changeset/
+          git commit -m "release: v${RELEASE_VERSION}"
+          git tag "v${RELEASE_VERSION}"
           git push origin main --tags
 
   publish:
