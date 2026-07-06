@@ -8,19 +8,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::config::Config;
 use crate::crypto::Cipher;
+use crate::fileutil::is_safe_path_component;
 use crate::manifest::Manifest;
 use crate::merge::smart_merge;
 use crate::parser::{entries_to_jsonl, parse_jsonl, parse_jsonl_file};
 use crate::resolver::{build_remote_map, resolve_project_dir};
 use crate::scanner::{LocalSession, ScanFilter, scan_sessions};
 use crate::storage::StorageProvider;
-
-fn is_safe_path_component(s: &str) -> bool {
-    if s.contains('/') || s.contains('\\') {
-        return false;
-    }
-    !s.split('-').any(|seg| seg == "..")
-}
 
 fn session_filename(uuid: &str, encrypted: bool) -> String {
     if encrypted {

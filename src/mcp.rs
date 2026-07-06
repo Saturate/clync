@@ -389,8 +389,8 @@ fn call_tool(name: &str, args: &Value) -> Result<String> {
                 .unwrap_or(config.sync.auto_git);
             let r = crate::do_push(git)?;
             Ok(format!(
-                "pushed {} sessions ({} unchanged), {} extras",
-                r.sessions, r.skipped, r.extras
+                "pushed {} sessions ({} unchanged), {} extras, {} memories",
+                r.sessions, r.skipped, r.extras, r.memories
             ))
         }
         "sync_pull" => {
@@ -401,8 +401,8 @@ fn call_tool(name: &str, args: &Value) -> Result<String> {
                 .unwrap_or(config.sync.auto_git);
             let r = crate::do_pull(git)?;
             Ok(format!(
-                "pulled {} new, {} merged, {} unchanged, {} extras",
-                r.pulled, r.merged, r.skipped, r.extras
+                "pulled {} new, {} merged, {} unchanged, {} extras, {} memories",
+                r.pulled, r.merged, r.skipped, r.extras, r.memories
             ))
         }
         "sync_log" => {

@@ -912,6 +912,58 @@ fn memory_sync_roundtrip() {
 }
 
 #[test]
+fn memory_index_merge_on_pull() {
+    let env = TestEnv::new("memory_index_merge");
+    let a = env.machine("a");
+    a.init();
+    a.write_session("proj", "s1", &[&mode_entry()]);
+    a.write_memory(
+        "proj",
+        "MEMORY.md",
+        "- [Alpha](alpha.md) - from machine a\n",
+    );
+    a.write_memory("proj", "alpha.md", "alpha content\n");
+    a.push();
+
+    let b = env.machine("b");
+    b.join();
+
+    // B adds its own memory entry and pushes
+    b.write_memory("proj", "MEMORY.md", "- [Beta](beta.md) - from machine b\n");
+    b.write_memory("proj", "beta.md", "beta content\n");
+    // Force future mtime so push detects the change (mtime-based)
+    let future = std::time::SystemTime::now() + std::time::Duration::from_secs(10);
+    let ft = filetime::FileTime::from_system_time(future);
+    let mem_dir = b.projects_dir().join("proj").join("memory");
+    filetime::set_file_mtime(mem_dir.join("MEMORY.md"), ft).unwrap();
+    filetime::set_file_mtime(mem_dir.join("beta.md"), ft).unwrap();
+    b.push();
+
+    // A pulls - should merge MEMORY.md
+    a.pull();
+    let memory_md = std::fs::read_to_string(
+        a.projects_dir()
+            .join("proj")
+            .join("memory")
+            .join("MEMORY.md"),
+    )
+    .unwrap();
+    assert!(
+        memory_md.contains("alpha.md"),
+        "should keep local entry: {memory_md}"
+    );
+    assert!(
+        memory_md.contains("beta.md"),
+        "should add remote entry: {memory_md}"
+    );
+    assert_eq!(
+        memory_md.matches("alpha.md").count(),
+        1,
+        "no duplicates: {memory_md}"
+    );
+}
+
+#[test]
 fn large_session_sync() {
     let env = TestEnv::new("large_session");
     let a = env.machine("a");
@@ -1267,7 +1319,7 @@ fn extras_not_in_repo_when_disabled() {
     a.push();
 
     let extras_dir = a.sync_repo.join("extras");
-    let has_memories = extras_dir.join("memories").exists();
+    let has_memories = a.sync_repo.join("memories").exists();
     let has_settings = extras_dir.join("settings.json").exists();
     let has_commands = extras_dir.join("commands").exists();
     let has_skills = extras_dir.join("skills").exists();

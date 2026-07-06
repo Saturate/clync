@@ -1,10 +1,12 @@
 mod config;
 mod crypto;
 mod extras;
+pub(crate) mod fileutil;
 pub(crate) mod io;
 mod list;
 mod manifest;
 mod mcp;
+mod memories;
 mod merge;
 mod parser;
 mod repo_meta;
@@ -421,13 +423,15 @@ fn cmd_init_interactive(input: &dyn InputSource) -> Result<()> {
 
         let result = sync::push(&config, &keys, &filter, &git_storage)?;
         let extras = extras::push_extras(&config, &keys)?;
+        let mem = memories::push_memories(&config, &keys)?;
         println!(
             "synced {} sessions, {} extras",
-            result.pushed, extras.pushed
+            result.pushed,
+            extras.pushed + mem.pushed
         );
 
         let machine = manifest::get_machine_id();
-        let total = result.pushed + extras.pushed;
+        let total = result.pushed + extras.pushed + mem.pushed;
         git_storage.commit(&format!("clync init ({total} files) from {machine}"))?;
 
         if git_storage.has_remote() {
@@ -539,6 +543,7 @@ pub struct PushOutput {
     pub sessions: u32,
     pub skipped: u32,
     pub extras: u32,
+    pub memories: u32,
 }
 
 pub fn do_push(use_git: bool) -> Result<PushOutput> {
@@ -546,33 +551,41 @@ pub fn do_push(use_git: bool) -> Result<PushOutput> {
     let cipher = Cipher::from_config(&config.encryption)?;
     let storage = GitStorage::new(config.sync.repo.clone());
 
-    let (pushed, skipped, extras) = {
+    let (pushed, skipped, extras, mem) = {
         let _lock = storage.try_lock()?;
 
         repo_meta::RepoMeta::from_config(&config).save(&config.sync.repo)?;
         ensure_repo_readme(&config)?;
+        auto_migrate_memories(&config, &cipher);
 
         let filter = ScanFilter::default();
         let result = sync::push(&config, &cipher, &filter, &storage)?;
         let extras_result = extras::push_extras(&config, &cipher)?;
+        let mem_result = memories::push_memories(&config, &cipher)?;
 
         let mut log = synclog::SyncLogEntry::new("push");
         log.sessions_pushed = result.pushed;
         log.sessions_skipped = result.skipped;
-        log.extras = extras_result.pushed;
+        log.extras = extras_result.pushed + mem_result.pushed;
         synclog::append(&config.sync.repo, &log).ok();
 
-        (result.pushed, result.skipped, extras_result.pushed)
+        (
+            result.pushed,
+            result.skipped,
+            extras_result.pushed,
+            mem_result.pushed,
+        )
     };
 
-    if use_git && (pushed > 0 || extras > 0) {
+    let total_extra = extras + mem;
+    if use_git && (pushed > 0 || total_extra > 0) {
         let machine = manifest::get_machine_id();
         let mut parts = Vec::new();
         if pushed > 0 {
             parts.push(format!("{pushed} sessions"));
         }
-        if extras > 0 {
-            parts.push(format!("{extras} extras"));
+        if total_extra > 0 {
+            parts.push(format!("{total_extra} extras"));
         }
         let msg = format!("clync push ({}) from {machine}", parts.join(", "));
         storage.commit(&msg)?;
@@ -583,6 +596,7 @@ pub fn do_push(use_git: bool) -> Result<PushOutput> {
         sessions: pushed,
         skipped,
         extras,
+        memories: mem,
     })
 }
 
@@ -591,6 +605,7 @@ pub struct PullOutput {
     pub merged: u32,
     pub skipped: u32,
     pub extras: u32,
+    pub memories: u32,
 }
 
 pub fn do_pull(use_git: bool) -> Result<PullOutput> {
@@ -601,19 +616,22 @@ pub fn do_pull(use_git: bool) -> Result<PullOutput> {
         storage.pull_remote()?;
     }
 
-    let (pulled, merged, skipped, extras) = {
+    let (pulled, merged, skipped, extras, mem) = {
         let _lock = storage.try_lock()?;
 
         let cipher = Cipher::from_config(&config.encryption)?;
+        auto_migrate_memories(&config, &cipher);
+
         let filter = ScanFilter::default();
         let result = sync::pull(&config, &cipher, &filter, &storage)?;
         let extras_result = extras::pull_extras(&config, &cipher)?;
+        let mem_result = memories::pull_memories(&config, &cipher)?;
 
         let mut log = synclog::SyncLogEntry::new("pull");
         log.sessions_pulled = result.pulled;
         log.sessions_merged = result.merged;
         log.sessions_skipped = result.skipped;
-        log.extras = extras_result.pulled;
+        log.extras = extras_result.pulled + mem_result.pulled;
         synclog::append(&config.sync.repo, &log).ok();
 
         (
@@ -621,6 +639,7 @@ pub fn do_pull(use_git: bool) -> Result<PullOutput> {
             result.merged,
             result.skipped,
             extras_result.pulled,
+            mem_result.pulled,
         )
     };
 
@@ -635,6 +654,7 @@ pub fn do_pull(use_git: bool) -> Result<PullOutput> {
         merged,
         skipped,
         extras,
+        memories: mem,
     })
 }
 
@@ -647,6 +667,7 @@ fn cmd_push(no_git: bool, filter: ScanFilter) -> Result<()> {
 
     repo_meta::RepoMeta::from_config(&config).save(&config.sync.repo)?;
     ensure_repo_readme(&config)?;
+    auto_migrate_memories(&config, &cipher);
 
     let result = sync::push(&config, &cipher, &filter, &storage)?;
     let verb = if matches!(config.encryption, EncryptionConfig::None) {
@@ -664,20 +685,26 @@ fn cmd_push(no_git: bool, filter: ScanFilter) -> Result<()> {
         println!("push: {} extra files synced", extras_result.pushed);
     }
 
+    let mem_result = memories::push_memories(&config, &cipher)?;
+    if mem_result.pushed > 0 {
+        println!("push: {} memory files synced", mem_result.pushed);
+    }
+
     let mut log = synclog::SyncLogEntry::new("push");
     log.sessions_pushed = result.pushed;
     log.sessions_skipped = result.skipped;
-    log.extras = extras_result.pushed;
+    log.extras = extras_result.pushed + mem_result.pushed;
     synclog::append(&config.sync.repo, &log).ok();
 
-    if use_git && (result.pushed > 0 || extras_result.pushed > 0) {
+    let total_extra = extras_result.pushed + mem_result.pushed;
+    if use_git && (result.pushed > 0 || total_extra > 0) {
         let machine = manifest::get_machine_id();
         let mut parts = Vec::new();
         if result.pushed > 0 {
             parts.push(format!("{} sessions", result.pushed));
         }
-        if extras_result.pushed > 0 {
-            parts.push(format!("{} extras", extras_result.pushed));
+        if total_extra > 0 {
+            parts.push(format!("{total_extra} extras"));
         }
         storage.commit(&format!("clync push ({}) from {machine}", parts.join(", ")))?;
         storage.push_remote()?;
@@ -697,6 +724,8 @@ fn cmd_pull(no_git: bool, filter: ScanFilter) -> Result<()> {
     }
 
     let cipher = Cipher::from_config(&config.encryption)?;
+    auto_migrate_memories(&config, &cipher);
+
     let result = sync::pull(&config, &cipher, &filter, &storage)?;
     println!(
         "pull: {} new, {} merged, {} unchanged",
@@ -708,11 +737,16 @@ fn cmd_pull(no_git: bool, filter: ScanFilter) -> Result<()> {
         println!("pull: {} extra files restored", extras_result.pulled);
     }
 
+    let mem_result = memories::pull_memories(&config, &cipher)?;
+    if mem_result.pulled > 0 {
+        println!("pull: {} memory files restored", mem_result.pulled);
+    }
+
     let mut log = synclog::SyncLogEntry::new("pull");
     log.sessions_pulled = result.pulled;
     log.sessions_merged = result.merged;
     log.sessions_skipped = result.skipped;
-    log.extras = extras_result.pulled;
+    log.extras = extras_result.pulled + mem_result.pulled;
     synclog::append(&config.sync.repo, &log).ok();
 
     if use_git {
@@ -1071,12 +1105,16 @@ fn cmd_join(
     if do_pull {
         let pull_result = (|| -> Result<()> {
             let cipher = Cipher::from_config(&config.encryption)?;
+            auto_migrate_memories(&config, &cipher);
             let filter = ScanFilter::default();
             let result = sync::pull(&config, &cipher, &filter, &git_storage)?;
             let extras = extras::pull_extras(&config, &cipher)?;
+            let mem = memories::pull_memories(&config, &cipher)?;
             println!(
                 "pulled {} sessions, {} merged, {} extras",
-                result.pulled, result.merged, extras.pulled
+                result.pulled,
+                result.merged,
+                extras.pulled + mem.pulled
             );
             Ok(())
         })();
@@ -1235,6 +1273,24 @@ fn prompt_manual_key(
     let key_path = config_dir.join("key.txt");
     write_secret_file(&key_path, &format!("{key}\n"))?;
     Ok(EncryptionConfig::KeyFile { path: key_path })
+}
+
+fn auto_migrate_memories(config: &Config, cipher: &Cipher) {
+    let old_dir = config.sync.repo.join("extras").join("memories");
+    if !old_dir.exists() {
+        return;
+    }
+    match memories::migrate_from_extras(config, cipher) {
+        Ok((projects, files)) => {
+            if projects > 0 {
+                eprintln!(
+                    "migrated {files} memory files across {projects} projects \
+                     from extras/memories/ to memories/"
+                );
+            }
+        }
+        Err(e) => eprintln!("warning: memory migration failed: {e}"),
+    }
 }
 
 fn ssh_to_https(url: &str) -> String {
