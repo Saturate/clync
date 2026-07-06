@@ -1,6 +1,7 @@
 mod config;
 mod crypto;
 mod extras;
+pub(crate) mod fileutil;
 pub(crate) mod io;
 mod list;
 mod manifest;
@@ -422,11 +423,7 @@ fn cmd_init_interactive(input: &dyn InputSource) -> Result<()> {
 
         let result = sync::push(&config, &keys, &filter, &git_storage)?;
         let extras = extras::push_extras(&config, &keys)?;
-        let mem = if config.targets.memories {
-            memories::push_memories(&config, &keys)?
-        } else {
-            memories::MemoriesPushResult { pushed: 0 }
-        };
+        let mem = memories::push_memories(&config, &keys)?;
         println!(
             "synced {} sessions, {} extras",
             result.pushed,
@@ -564,11 +561,7 @@ pub fn do_push(use_git: bool) -> Result<PushOutput> {
         let filter = ScanFilter::default();
         let result = sync::push(&config, &cipher, &filter, &storage)?;
         let extras_result = extras::push_extras(&config, &cipher)?;
-        let mem_result = if config.targets.memories {
-            memories::push_memories(&config, &cipher)?
-        } else {
-            memories::MemoriesPushResult { pushed: 0 }
-        };
+        let mem_result = memories::push_memories(&config, &cipher)?;
 
         let mut log = synclog::SyncLogEntry::new("push");
         log.sessions_pushed = result.pushed;
@@ -632,11 +625,7 @@ pub fn do_pull(use_git: bool) -> Result<PullOutput> {
         let filter = ScanFilter::default();
         let result = sync::pull(&config, &cipher, &filter, &storage)?;
         let extras_result = extras::pull_extras(&config, &cipher)?;
-        let mem_result = if config.targets.memories {
-            memories::pull_memories(&config, &cipher)?
-        } else {
-            memories::MemoriesPullResult { pulled: 0 }
-        };
+        let mem_result = memories::pull_memories(&config, &cipher)?;
 
         let mut log = synclog::SyncLogEntry::new("pull");
         log.sessions_pulled = result.pulled;
@@ -696,11 +685,7 @@ fn cmd_push(no_git: bool, filter: ScanFilter) -> Result<()> {
         println!("push: {} extra files synced", extras_result.pushed);
     }
 
-    let mem_result = if config.targets.memories {
-        memories::push_memories(&config, &cipher)?
-    } else {
-        memories::MemoriesPushResult { pushed: 0 }
-    };
+    let mem_result = memories::push_memories(&config, &cipher)?;
     if mem_result.pushed > 0 {
         println!("push: {} memory files synced", mem_result.pushed);
     }
@@ -752,11 +737,7 @@ fn cmd_pull(no_git: bool, filter: ScanFilter) -> Result<()> {
         println!("pull: {} extra files restored", extras_result.pulled);
     }
 
-    let mem_result = if config.targets.memories {
-        memories::pull_memories(&config, &cipher)?
-    } else {
-        memories::MemoriesPullResult { pulled: 0 }
-    };
+    let mem_result = memories::pull_memories(&config, &cipher)?;
     if mem_result.pulled > 0 {
         println!("pull: {} memory files restored", mem_result.pulled);
     }
@@ -1128,11 +1109,7 @@ fn cmd_join(
             let filter = ScanFilter::default();
             let result = sync::pull(&config, &cipher, &filter, &git_storage)?;
             let extras = extras::pull_extras(&config, &cipher)?;
-            let mem = if config.targets.memories {
-                memories::pull_memories(&config, &cipher)?
-            } else {
-                memories::MemoriesPullResult { pulled: 0 }
-            };
+            let mem = memories::pull_memories(&config, &cipher)?;
             println!(
                 "pulled {} sessions, {} merged, {} extras",
                 result.pulled,

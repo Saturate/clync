@@ -4,20 +4,11 @@ use walkdir::WalkDir;
 
 use crate::config::Config;
 use crate::crypto::Cipher;
+use crate::fileutil::{
+    encrypted_name, is_encrypted, is_safe_path_component, mtime_secs, restore_file, sync_directory,
+};
 use crate::manifest::normalize_project_path;
 use crate::resolver::{build_remote_map, resolve_project_dir};
-
-fn encrypted_name(name: &str, encrypted: bool) -> String {
-    if encrypted {
-        format!("{name}.age")
-    } else {
-        name.to_string()
-    }
-}
-
-fn is_encrypted(config: &Config) -> bool {
-    !matches!(config.encryption, crate::config::EncryptionConfig::None)
-}
 
 pub struct MemoriesPushResult {
     pub pushed: u32,
@@ -28,6 +19,10 @@ pub struct MemoriesPullResult {
 }
 
 pub fn push_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPushResult> {
+    if !config.targets.memories {
+        return Ok(MemoriesPushResult { pushed: 0 });
+    }
+
     let claude_dir = &config.sync.claude_dir;
     let memories_dir = config.sync.repo.join("memories");
     let enc = is_encrypted(config);
@@ -57,6 +52,10 @@ pub fn push_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPushRes
 }
 
 pub fn pull_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPullResult> {
+    if !config.targets.memories {
+        return Ok(MemoriesPullResult { pulled: 0 });
+    }
+
     let claude_dir = &config.sync.claude_dir;
     let memories_dir = config.sync.repo.join("memories");
     if !memories_dir.exists() {
@@ -73,18 +72,19 @@ pub fn pull_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPullRes
             continue;
         }
         let normalized_name = project_entry.file_name().to_string_lossy().to_string();
+        if !is_safe_path_component(&normalized_name) {
+            eprintln!("warning: skipping memory dir with unsafe path: {normalized_name}");
+            continue;
+        }
         let local_dir_name = resolve_project_dir(&normalized_name, &remote_map, &projects_dir)
             .unwrap_or_else(|| crate::manifest::denormalize_project_path(&normalized_name));
         let dst_dir = projects_dir.join(&local_dir_name).join("memory");
-        pulled += restore_directory(&project_entry.path(), &dst_dir, cipher)?;
+        pulled += restore_memory_directory(&project_entry.path(), &dst_dir, cipher)?;
     }
 
     Ok(MemoriesPullResult { pulled })
 }
 
-/// Migrate memories from the old `extras/memories/` layout (raw paths) to
-/// the new `memories/` layout (normalized paths).
-/// Returns (migrated_projects, migrated_files).
 pub fn migrate_from_extras(config: &Config, cipher: &Cipher) -> Result<(u32, u32)> {
     let extras_memories = config.sync.repo.join("extras").join("memories");
     if !extras_memories.exists() {
@@ -172,50 +172,7 @@ pub fn migrate_from_extras(config: &Config, cipher: &Cipher) -> Result<(u32, u32
     Ok((projects, files))
 }
 
-fn sync_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher, encrypted: bool) -> Result<u32> {
-    if !src_dir.exists() {
-        return Ok(0);
-    }
-    std::fs::create_dir_all(dst_dir)?;
-    let mut count = 0u32;
-    for entry in WalkDir::new(src_dir).into_iter().filter_map(|e| e.ok()) {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let rel = entry.path().strip_prefix(src_dir)?;
-        let dst = dst_dir.join(encrypted_name(&rel.to_string_lossy(), encrypted));
-        count += sync_file_if_changed(entry.path(), &dst, cipher)?;
-    }
-    Ok(count)
-}
-
-fn sync_file_if_changed(src: &Path, dst: &Path, cipher: &Cipher) -> Result<u32> {
-    if !src.exists() {
-        return Ok(0);
-    }
-
-    let src_mtime = std::fs::metadata(src)?
-        .modified()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    if dst.exists() {
-        let dst_mtime = std::fs::metadata(dst)?
-            .modified()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        if src_mtime <= dst_mtime {
-            return Ok(0);
-        }
-    }
-
-    cipher.encrypt_file(src, dst)?;
-    Ok(1)
-}
-
-fn restore_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Result<u32> {
+fn restore_memory_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Result<u32> {
     if !src_dir.exists() {
         return Ok(0);
     }
@@ -242,42 +199,11 @@ fn restore_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Result<
     Ok(count)
 }
 
-fn restore_file(src: &Path, dst: &Path, cipher: &Cipher) -> Result<u32> {
-    if !src.exists() {
+fn merge_memory_index(remote_src: &Path, local_dst: &Path, cipher: &Cipher) -> Result<u32> {
+    if local_dst.exists() && mtime_secs(remote_src)? < mtime_secs(local_dst)? {
         return Ok(0);
     }
 
-    if dst.exists() {
-        let src_mtime = std::fs::metadata(src)?
-            .modified()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let dst_mtime = std::fs::metadata(dst)?
-            .modified()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        if src_mtime <= dst_mtime {
-            return Ok(0);
-        }
-    }
-
-    let plaintext = match cipher.decrypt_file(src) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("warning: could not decrypt {}: {e}", src.display());
-            return Ok(0);
-        }
-    };
-    if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(dst, plaintext)?;
-    Ok(1)
-}
-
-fn merge_memory_index(remote_src: &Path, local_dst: &Path, cipher: &Cipher) -> Result<u32> {
     let remote_plain = match cipher.decrypt_file(remote_src) {
         Ok(p) => p,
         Err(e) => {
@@ -296,45 +222,54 @@ fn merge_memory_index(remote_src: &Path, local_dst: &Path, cipher: &Cipher) -> R
     Ok(1)
 }
 
-/// Merge two MEMORY.md index files by unioning link entries.
-/// Local entries are preserved in order; new remote entries are appended.
-/// On conflict (same link target), the longer line wins.
 fn merge_memory_md(local: &str, remote: &str) -> String {
-    let mut entries: Vec<(String, String)> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut non_link_lines: Vec<String> = Vec::new();
 
-    for line in local.lines() {
+    // Track link targets and their positions in local lines
+    let local_lines: Vec<&str> = local.lines().collect();
+    let mut link_targets: Vec<(usize, String)> = Vec::new();
+    for (i, line) in local_lines.iter().enumerate() {
         if let Some(target) = extract_link_target(line) {
-            entries.push((target.clone(), line.to_string()));
+            link_targets.push((i, target.clone()));
             seen.insert(target);
-        } else {
-            non_link_lines.push(line.to_string());
         }
     }
 
+    // Collect remote entries: upgrades for existing targets + new entries
+    let mut upgrades: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut new_entries: Vec<String> = Vec::new();
     for line in remote.lines() {
         if let Some(target) = extract_link_target(line) {
             if seen.contains(&target) {
-                if let Some(existing) = entries.iter_mut().find(|(t, _)| t == &target)
-                    && line.len() > existing.1.len()
+                if let Some((idx, _)) = link_targets.iter().find(|(_, t)| t == &target)
+                    && line.len() > local_lines[*idx].len()
                 {
-                    existing.1 = line.to_string();
+                    upgrades.insert(target, line.to_string());
                 }
             } else {
-                entries.push((target.clone(), line.to_string()));
+                new_entries.push(line.to_string());
                 seen.insert(target);
             }
         }
     }
 
     let mut result = String::new();
-    for line in &non_link_lines {
-        result.push_str(line);
+    for (i, line) in local_lines.iter().enumerate() {
+        if let Some(target) = extract_link_target(line) {
+            if let Some(upgraded) = upgrades.get(&target) {
+                result.push_str(upgraded);
+            } else {
+                result.push_str(line);
+            }
+        } else {
+            // Preserve non-link lines (headers, blank lines) in place
+            let _ = i;
+            result.push_str(line);
+        }
         result.push('\n');
     }
-    for (_, line) in &entries {
-        result.push_str(line);
+    for entry in &new_entries {
+        result.push_str(entry);
         result.push('\n');
     }
     result
@@ -393,13 +328,27 @@ mod tests {
     }
 
     #[test]
-    fn merge_preserves_non_link_lines() {
+    fn merge_preserves_non_link_lines_in_place() {
         let local = "# Header\n\n- [Note](note.md) - a note\n";
         let remote = "- [Other](other.md) - another\n";
         let merged = merge_memory_md(local, remote);
-        assert!(merged.contains("# Header"));
-        assert!(merged.contains("note.md"));
-        assert!(merged.contains("other.md"));
+        let lines: Vec<&str> = merged.lines().collect();
+        assert_eq!(lines[0], "# Header");
+        assert_eq!(lines[1], "");
+        assert!(lines[2].contains("note.md"));
+        assert!(lines[3].contains("other.md"));
+    }
+
+    #[test]
+    fn merge_preserves_interleaved_blank_lines() {
+        let local = "- [A](a.md) - first\n\n- [B](b.md) - second\n";
+        let remote = "- [C](c.md) - third\n";
+        let merged = merge_memory_md(local, remote);
+        let lines: Vec<&str> = merged.lines().collect();
+        assert_eq!(lines[0], "- [A](a.md) - first");
+        assert_eq!(lines[1], "");
+        assert_eq!(lines[2], "- [B](b.md) - second");
+        assert_eq!(lines[3], "- [C](c.md) - third");
     }
 
     #[test]
