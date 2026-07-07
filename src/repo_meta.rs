@@ -157,11 +157,13 @@ mod tests {
     fn from_config_onepassword() {
         let config = Config {
             sync: SyncConfig {
-                repo: PathBuf::from("/tmp"),
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
-                auto_git: true,
-                git: Default::default(),
+                storage: StorageConfig::Git {
+                    path: PathBuf::from("/tmp"),
+                    auto_push: true,
+                    lfs_threshold: 0,
+                },
             },
             encryption: EncryptionConfig::OnePassword {
                 reference: "op://vault/item".into(),
@@ -177,11 +179,13 @@ mod tests {
     fn from_config_bitwarden() {
         let config = Config {
             sync: SyncConfig {
-                repo: PathBuf::from("/tmp"),
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
-                auto_git: true,
-                git: Default::default(),
+                storage: StorageConfig::Git {
+                    path: PathBuf::from("/tmp"),
+                    auto_push: true,
+                    lfs_threshold: 0,
+                },
             },
             encryption: EncryptionConfig::Bitwarden {
                 item_id: "my-item".into(),
@@ -198,11 +202,13 @@ mod tests {
     fn from_config_pass() {
         let config = Config {
             sync: SyncConfig {
-                repo: PathBuf::from("/tmp"),
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
-                auto_git: true,
-                git: Default::default(),
+                storage: StorageConfig::Git {
+                    path: PathBuf::from("/tmp"),
+                    auto_push: true,
+                    lfs_threshold: 0,
+                },
             },
             encryption: EncryptionConfig::Pass {
                 entry: "clync/key".into(),
@@ -218,11 +224,13 @@ mod tests {
     fn from_config_passphrase() {
         let config = Config {
             sync: SyncConfig {
-                repo: PathBuf::from("/tmp"),
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
-                auto_git: true,
-                git: Default::default(),
+                storage: StorageConfig::Git {
+                    path: PathBuf::from("/tmp"),
+                    auto_push: true,
+                    lfs_threshold: 0,
+                },
             },
             encryption: EncryptionConfig::Passphrase {
                 env_var: "MY_PASS".into(),

@@ -14,7 +14,7 @@ use crate::merge::smart_merge;
 use crate::parser::{entries_to_jsonl, parse_jsonl, parse_jsonl_file};
 use crate::resolver::{build_remote_map, resolve_project_dir};
 use crate::scanner::{LocalSession, ScanFilter, scan_sessions};
-use crate::storage::StorageProvider;
+use crate::store::Store;
 
 fn session_filename(uuid: &str, encrypted: bool) -> String {
     if encrypted {
@@ -32,11 +32,11 @@ pub fn push(
     config: &Config,
     cipher: &Cipher,
     filter: &ScanFilter,
-    storage: &dyn StorageProvider,
+    store: &dyn Store,
 ) -> Result<PushResult> {
     let manifest_rel = manifest_filename(config);
-    let mut manifest = if storage.exists(&manifest_rel) {
-        let data = storage.read_file(&manifest_rel)?;
+    let mut manifest = if store.exists(&manifest_rel) {
+        let data = store.read_file(&manifest_rel)?;
         let plain = cipher.decrypt(&data)?;
         serde_json::from_slice(&plain)?
     } else {
@@ -62,7 +62,7 @@ pub fn push(
     let results: Vec<_> = to_push
         .par_iter()
         .map(|session| {
-            let result = push_session(session, cipher, storage, encrypted, include_companions);
+            let result = push_session(session, cipher, store, encrypted, include_companions);
             (session.uuid.clone(), session.entry.clone(), result)
         })
         .collect();
@@ -78,20 +78,21 @@ pub fn push(
         }
     }
 
-    let lfs_threshold = config.sync.git.lfs_threshold;
-    if lfs_threshold > 0 && push_count > 0 {
-        let root = storage.root();
+    let lfs_threshold = config.sync.storage.lfs_threshold();
+    if lfs_threshold > 0
+        && push_count > 0
+        && let Some(root) = store.local_path()
+    {
         for (uuid, _) in manifest.sessions.iter() {
             let filename = session_filename(uuid, encrypted);
-            let path = root.join("sessions").join(&filename);
-            if let Ok(meta) = std::fs::metadata(&path)
-                && meta.len() >= lfs_threshold
+            let rel = format!("sessions/{filename}");
+            if let Ok(size) = store.file_size(&rel)
+                && size >= lfs_threshold
             {
-                let rel = format!("sessions/{filename}");
                 match crate::lfs::ensure_lfs_for_file(root, &rel) {
                     Ok(()) => eprintln!(
                         "lfs: tracking {rel} ({:.1} MB)",
-                        meta.len() as f64 / (1024.0 * 1024.0)
+                        size as f64 / (1024.0 * 1024.0)
                     ),
                     Err(e) => eprintln!("warning: could not enable lfs for {rel}: {e}"),
                 }
@@ -101,10 +102,7 @@ pub fn push(
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
     let manifest_data = cipher.encrypt(manifest_json.as_bytes())?;
-    let tmp_manifest = format!("{manifest_rel}.tmp");
-    storage.write_file(&tmp_manifest, &manifest_data)?;
-    let root = storage.root();
-    std::fs::rename(root.join(&tmp_manifest), root.join(&manifest_rel))?;
+    store.atomic_write(&manifest_rel, &manifest_data)?;
 
     Ok(PushResult {
         pushed: push_count,
@@ -115,7 +113,7 @@ pub fn push(
 fn push_session(
     session: &LocalSession,
     cipher: &Cipher,
-    storage: &dyn StorageProvider,
+    store: &dyn Store,
     encrypted: bool,
     include_companions: bool,
 ) -> Result<()> {
@@ -126,13 +124,13 @@ fn push_session(
     let data = cipher
         .encrypt(&plaintext)
         .with_context(|| format!("encrypting session {}", session.uuid))?;
-    storage.write_file(&rel_path, &data)?;
+    store.write_file(&rel_path, &data)?;
 
     if include_companions && let Some(ref companion) = session.companion_dir {
         let tar_data = tar_directory(companion)?;
         let data = cipher.encrypt(&tar_data)?;
         let ext = if encrypted { "tar.gz.age" } else { "tar.gz" };
-        storage.write_file(&format!("sessions/{}.dir.{ext}", session.uuid), &data)?;
+        store.write_file(&format!("sessions/{}.dir.{ext}", session.uuid), &data)?;
     }
 
     Ok(())
@@ -156,10 +154,10 @@ pub fn pull(
     config: &Config,
     cipher: &Cipher,
     filter: &ScanFilter,
-    storage: &dyn StorageProvider,
+    store: &dyn Store,
 ) -> Result<PullResult> {
     let manifest_rel = manifest_filename(config);
-    if !storage.exists(&manifest_rel) {
+    if !store.exists(&manifest_rel) {
         return Ok(PullResult {
             pulled: 0,
             merged: 0,
@@ -167,7 +165,7 @@ pub fn pull(
         });
     }
 
-    let manifest_data = storage.read_file(&manifest_rel)?;
+    let manifest_data = store.read_file(&manifest_rel)?;
     let manifest_plain = cipher.decrypt(&manifest_data)?;
     let remote_manifest: Manifest = serde_json::from_slice(&manifest_plain)?;
 
@@ -192,7 +190,7 @@ pub fn pull(
         let filename = session_filename(uuid, encrypted);
         let rel_path = format!("sessions/{filename}");
 
-        if !storage.exists(&rel_path) {
+        if !store.exists(&rel_path) {
             eprintln!("warning: session {uuid} not found in repo, skipping");
             skipped += 1;
             continue;
@@ -241,7 +239,7 @@ pub fn pull(
                         project_dir_name,
                         rel_path,
                         cipher,
-                        storage,
+                        store,
                         &projects_dir,
                         encrypted,
                     );
@@ -262,7 +260,7 @@ pub fn pull(
                         rel_path,
                         local_jsonl_path,
                         cipher,
-                        storage,
+                        store,
                         &projects_dir,
                     );
                     if r.is_ok() {
@@ -298,11 +296,11 @@ fn pull_new(
     project_dir_name: &str,
     rel_path: &str,
     cipher: &Cipher,
-    storage: &dyn StorageProvider,
+    store: &dyn Store,
     projects_dir: &Path,
     encrypted: bool,
 ) -> Result<()> {
-    let data = storage.read_file(rel_path)?;
+    let data = store.read_file(rel_path)?;
     let plaintext = cipher.decrypt(&data)?;
     let target_dir = projects_dir.join(project_dir_name);
     std::fs::create_dir_all(&target_dir)?;
@@ -310,8 +308,8 @@ fn pull_new(
 
     let ext = if encrypted { "tar.gz.age" } else { "tar.gz" };
     let companion_rel = format!("sessions/{uuid}.dir.{ext}");
-    if storage.exists(&companion_rel) {
-        let tar_data = storage.read_file(&companion_rel)?;
+    if store.exists(&companion_rel) {
+        let tar_data = store.read_file(&companion_rel)?;
         let plain_tar = cipher.decrypt(&tar_data)?;
         let companion_dir = target_dir.join(uuid);
         untar_directory(&plain_tar, &companion_dir)?;
@@ -326,10 +324,10 @@ fn pull_merge(
     rel_path: &str,
     local_jsonl_path: &Path,
     cipher: &Cipher,
-    storage: &dyn StorageProvider,
+    store: &dyn Store,
     projects_dir: &Path,
 ) -> Result<()> {
-    let remote_data = storage.read_file(rel_path)?;
+    let remote_data = store.read_file(rel_path)?;
     let remote_plain = cipher.decrypt(&remote_data)?;
     let remote_entries = parse_jsonl(&remote_plain)?;
     let local_entries = parse_jsonl_file(local_jsonl_path)?;
@@ -347,11 +345,11 @@ pub fn status(
     config: &Config,
     cipher: &Cipher,
     filter: &ScanFilter,
-    storage: &dyn StorageProvider,
+    store: &dyn Store,
 ) -> Result<StatusResult> {
     let manifest_rel = manifest_filename(config);
-    let remote_manifest = if storage.exists(&manifest_rel) {
-        let data = storage.read_file(&manifest_rel)?;
+    let remote_manifest = if store.exists(&manifest_rel) {
+        let data = store.read_file(&manifest_rel)?;
         let plain = cipher.decrypt(&data)?;
         serde_json::from_slice(&plain)?
     } else {

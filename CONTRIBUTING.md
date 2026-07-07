@@ -61,6 +61,11 @@ src/
   memories.rs      Memory sync with path normalization
   extras.rs        Settings, commands, skills sync
   fileutil.rs      Shared file helpers (encrypt, restore, sync)
+  store/
+    mod.rs         Store trait, LocalFs helper, factory
+    git.rs         Git storage backend
+    folder.rs      Local folder storage backend
+    s3.rs          S3-compatible storage backend (feature-gated)
   mcp.rs           MCP server (stdio JSON-RPC)
   mcp_help.rs      MCP help text
   config.rs        Config types and loading
@@ -69,7 +74,6 @@ src/
   manifest.rs      Session manifest and path normalization
   resolver.rs      Cross-machine project path resolution
   scanner.rs       Local session discovery
-  storage.rs       Git storage provider
   merge.rs         UUID-tree session merge
   parser.rs        JSONL session parser
 ```

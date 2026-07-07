@@ -10,7 +10,7 @@ Encrypted sync for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 
 ## What it does
 
-Claude Code stores conversations, memories, settings, commands, and skills locally in `~/.claude/`. clync encrypts all of it with [age](https://age-encryption.org) and syncs it through a git repo. When the same session is edited on two machines, clync merges them using the conversation's UUID tree structure instead of overwriting.
+Claude Code stores conversations, memories, settings, commands, and skills locally in `~/.claude/`. clync encrypts all of it with [age](https://age-encryption.org) and syncs it to a storage backend of your choice. When the same session is edited on two machines, clync merges them using the conversation's UUID tree structure instead of overwriting.
 
 Great for backup, and for people using more than one machine.
 
@@ -18,20 +18,26 @@ Great for backup, and for people using more than one machine.
 
 | Feature | Description |
 |---------|-------------|
+| **Multi-backend** | Git (default), local folder (NAS/Dropbox/USB), or S3-compatible cloud storage |
 | **Encryption** | age-based encryption with key management options |
 | **Smart merge** | UUID tree merge for diverged conversations |
 | **Full sync** | Sessions, memories, settings, commands, skills, CLAUDE.md |
 | **Parallel** | rayon-based parallel encrypt/decrypt |
 | **MCP server** | 8 tools for Claude Code integration |
-| **Multi-machine** | `join` command for second machine setup |
+| **Multi-machine** | `join` command for second machine setup (git) |
 | **Key management** | Local key file, passphrase, 1Password, Bitwarden, pass, or none |
-| **Auto git** | Commits and pushes automatically by default |
 | **Git LFS** | Auto-tracks session files over 99 MB with git-lfs |
 
 ## Install
 
 ```bash
 cargo install clync
+```
+
+With S3 support:
+
+```bash
+cargo install clync --features s3
 ```
 
 Or from source:
@@ -60,10 +66,13 @@ The interactive setup walks you through:
 Or non-interactive for scripting:
 
 ```bash
-# With 1Password
+# Git backend with 1Password
 clync init --repo ~/.clync/data --onepassword "op://Personal/clync/age-secret-key"
 
-# With no encryption (use a private repo, but I still do not recommend this as sessions have a lot of senstive data.)
+# Local folder (NAS, Dropbox, USB drive)
+clync init --storage folder --repo /mnt/nas/clync-data
+
+# No encryption (use a private repo)
 clync init --repo ~/.clync/data --no-encrypt
 ```
 
@@ -129,19 +138,57 @@ Six modes, pick during `clync init`:
 
 The age secret key is never stored in the sync repo. With password managers, the key syncs automatically across machines.
 
+## Storage backends
+
+### Git (default)
+
+Syncs through a git repo with optional remote. Supports LFS for large sessions.
+
+```toml
+[sync.storage]
+type = "git"
+path = "~/.clync/data"
+auto_push = true
+lfs_threshold = 103809024  # 99MB, 0 to disable
+```
+
+### Folder
+
+Syncs to any local or network-mounted path. No git needed.
+
+```toml
+[sync.storage]
+type = "folder"
+path = "/mnt/nas/clync-data"
+```
+
+### S3 (requires `--features s3`)
+
+Syncs to any S3-compatible service: AWS, Cloudflare R2, MinIO, DigitalOcean Spaces, Backblaze B2.
+
+```toml
+[sync.storage]
+type = "s3"
+bucket = "my-clync-bucket"
+region = "eu-west-1"
+prefix = "clync/"
+endpoint = "https://my-minio.example.com"  # omit for AWS
+```
+
+Credentials from environment (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) or config (`access_key`/`secret_key`).
+
 ## Configuration
 
 Config lives at `~/.config/clync/config.toml`:
 
 ```toml
 [sync]
-repo = "~/.clync/data"
 claude_dir = "~/.claude"
-include_companion_dirs = false
-auto_git = true
 
-[sync.git]
-lfs_threshold = 103809024  # auto-track sessions over 99MB with git-lfs (0 = disabled)
+[sync.storage]
+type = "git"
+path = "~/.clync/data"
+auto_push = true
 
 [encryption]
 method = "onepassword"

@@ -1,11 +1,11 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
-use crate::config::{self, Config, EncryptionConfig, SyncConfig};
+use crate::config::{self, Config, EncryptionConfig, StorageConfig, SyncConfig};
 use crate::crypto::Cipher;
 use crate::io::InputSource;
 use crate::scanner::ScanFilter;
-use crate::storage::GitStorage;
+use crate::store::git::GitStore;
 use crate::{extras, memories, repo_meta, resolver, sync};
 
 use super::init::prompt_manual_key;
@@ -33,9 +33,9 @@ pub fn cmd_join(
             .join("data")
     });
 
-    let git_storage = if repo.join(".git").exists() {
-        let storage = GitStorage::new(repo.clone());
-        let existing_remote = storage.get_remote_url().unwrap_or_default();
+    let git_store = if repo.join(".git").exists() {
+        let store = GitStore::new(repo.clone());
+        let existing_remote = store.get_remote_url().unwrap_or_default();
         let normalized_existing = resolver::normalize_remote(&existing_remote);
         let normalized_new = resolver::normalize_remote(&url);
         if !normalized_existing.is_empty() && normalized_existing != normalized_new {
@@ -46,16 +46,16 @@ pub fn cmd_join(
             );
         }
         println!("sync repo already exists, pulling latest...");
-        storage.pull_remote()?;
-        storage
+        store.pull_remote()?;
+        store
     } else {
         println!("cloning sync repo...");
-        GitStorage::clone_repo(&url, &repo)?
+        GitStore::clone_repo(&url, &repo)?
     };
 
     let has_files = repo.join("clync.toml").exists() || repo.join("manifest.json").exists();
     if !has_files {
-        git_storage.checkout_first_branch()?;
+        git_store.checkout_first_branch()?;
     }
 
     let meta = repo_meta::RepoMeta::load(&repo)?;
@@ -120,11 +120,13 @@ pub fn cmd_join(
 
     let config = Config {
         sync: SyncConfig {
-            repo: repo.clone(),
             claude_dir,
             include_companion_dirs: false,
-            auto_git: true,
-            git: Default::default(),
+            storage: StorageConfig::Git {
+                path: repo.clone(),
+                auto_push: true,
+                lfs_threshold: config::default_lfs_threshold(),
+            },
         },
         encryption,
         targets: Default::default(),
@@ -140,7 +142,7 @@ pub fn cmd_join(
             let cipher = Cipher::from_config(&config.encryption)?;
             auto_migrate_memories(&config, &cipher);
             let filter = ScanFilter::default();
-            let result = sync::pull(&config, &cipher, &filter, &git_storage)?;
+            let result = sync::pull(&config, &cipher, &filter, &git_store)?;
             let extras = extras::pull_extras(&config, &cipher)?;
             let mem = memories::pull_memories(&config, &cipher)?;
             println!(
@@ -161,6 +163,6 @@ pub fn cmd_join(
         }
     }
 
-    println!("\ndone. run `clync sync --git` to sync anytime.");
+    println!("\ndone. run `clync push` to sync anytime.");
     Ok(())
 }

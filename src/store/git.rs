@@ -1,51 +1,22 @@
 use anyhow::{Context, Result, bail};
-use fs2::FileExt;
 use std::path::{Path, PathBuf};
 
-#[allow(dead_code)]
-pub trait StorageProvider: Send + Sync {
-    fn write_file(&self, rel_path: &str, data: &[u8]) -> Result<()>;
-    fn read_file(&self, rel_path: &str) -> Result<Vec<u8>>;
-    fn exists(&self, rel_path: &str) -> bool;
-    fn list_files(&self, prefix: &str) -> Result<Vec<String>>;
-    fn sync_up(&self) -> Result<()>;
-    fn sync_down(&self) -> Result<()>;
-    fn root(&self) -> &Path;
+use super::{LocalFs, Store};
+
+pub struct GitStore {
+    fs: LocalFs,
 }
 
-pub struct GitStorage {
-    repo_path: PathBuf,
-}
-
-impl GitStorage {
-    pub fn new(repo_path: PathBuf) -> Self {
-        Self { repo_path }
-    }
-
-    pub fn lock(&self) -> Result<std::fs::File> {
-        self.lock_inner(true)
-    }
-
-    pub fn try_lock(&self) -> Result<std::fs::File> {
-        self.lock_inner(false)
-    }
-
-    fn lock_inner(&self, blocking: bool) -> Result<std::fs::File> {
-        let lock_path = self.repo_path.join(".clync.lock");
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&lock_path)
-            .context("could not create lock file")?;
-        if blocking {
-            file.lock_exclusive()
-                .context("another clync process is running (locked)")?;
-        } else {
-            file.try_lock_exclusive()
-                .context("sync in progress, try again shortly")?;
+impl GitStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            fs: LocalFs::new(path),
         }
-        Ok(file)
+    }
+
+    #[allow(dead_code)]
+    pub fn root(&self) -> &Path {
+        self.fs.root()
     }
 
     pub fn init_repo(repo_path: &Path) -> Result<Self> {
@@ -61,9 +32,7 @@ impl GitStorage {
             }
             std::fs::write(repo_path.join(".gitignore"), ".clync.lock\n")?;
         }
-        Ok(Self {
-            repo_path: repo_path.to_path_buf(),
-        })
+        Ok(Self::new(repo_path.to_path_buf()))
     }
 
     pub fn clone_repo(url: &str, dest: &Path) -> Result<Self> {
@@ -74,15 +43,13 @@ impl GitStorage {
         if !status.success() {
             bail!("git clone failed");
         }
-        Ok(Self {
-            repo_path: dest.to_path_buf(),
-        })
+        Ok(Self::new(dest.to_path_buf()))
     }
 
     pub fn has_remote(&self) -> bool {
         std::process::Command::new("git")
             .args(["remote"])
-            .current_dir(&self.repo_path)
+            .current_dir(self.fs.root())
             .output()
             .map(|o| !o.stdout.is_empty())
             .unwrap_or(false)
@@ -91,7 +58,7 @@ impl GitStorage {
     pub fn get_remote_url(&self) -> Option<String> {
         std::process::Command::new("git")
             .args(["remote", "get-url", "origin"])
-            .current_dir(&self.repo_path)
+            .current_dir(self.fs.root())
             .output()
             .ok()
             .filter(|o| o.status.success())
@@ -105,7 +72,7 @@ impl GitStorage {
     pub fn checkout_first_branch(&self) -> Result<()> {
         let branches = std::process::Command::new("git")
             .args(["branch", "-r"])
-            .current_dir(&self.repo_path)
+            .current_dir(self.fs.root())
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default();
@@ -116,36 +83,22 @@ impl GitStorage {
             }
             let _ = std::process::Command::new("git")
                 .args(["checkout", branch])
-                .current_dir(&self.repo_path)
+                .current_dir(self.fs.root())
                 .status();
             break;
         }
         Ok(())
     }
 
-    fn run_git(&self, args: &[&str]) -> Result<()> {
-        let status = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&self.repo_path)
-            .status()
-            .with_context(|| format!("git {} failed", args.join(" ")))?;
-        if !status.success() {
-            bail!("git {} exited with {}", args.join(" "), status);
-        }
-        Ok(())
-    }
-
     pub fn commit(&self, message: &str) -> Result<()> {
         self.run_git(&["add", "-A"])?;
-
         let status = std::process::Command::new("git")
             .args(["diff", "--cached", "--quiet"])
-            .current_dir(&self.repo_path)
+            .current_dir(self.fs.root())
             .status()?;
         if status.success() {
             return Ok(());
         }
-
         self.run_git(&["commit", "-m", message])
     }
 
@@ -157,7 +110,7 @@ impl GitStorage {
         if result.is_err() {
             let branch = std::process::Command::new("git")
                 .args(["branch", "--show-current"])
-                .current_dir(&self.repo_path)
+                .current_dir(self.fs.root())
                 .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .unwrap_or_else(|_| "main".into());
@@ -172,7 +125,7 @@ impl GitStorage {
         }
         let output = std::process::Command::new("git")
             .args(["pull", "--ff-only"])
-            .current_dir(&self.repo_path)
+            .current_dir(self.fs.root())
             .output()
             .context("git pull failed")?;
         if !output.status.success() {
@@ -181,62 +134,71 @@ impl GitStorage {
                 bail!(
                     "git pull failed: repos have diverged. \
                      Try: cd {} && git pull --rebase",
-                    self.repo_path.display()
+                    self.fs.root().display()
                 );
             }
             bail!("git pull --ff-only failed: {}", stderr.trim());
         }
         Ok(())
     }
+
+    fn run_git(&self, args: &[&str]) -> Result<()> {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(self.fs.root())
+            .status()
+            .with_context(|| format!("git {} failed", args.join(" ")))?;
+        if !status.success() {
+            bail!("git {} exited with {}", args.join(" "), status);
+        }
+        Ok(())
+    }
 }
 
-impl StorageProvider for GitStorage {
+impl Store for GitStore {
     fn write_file(&self, rel_path: &str, data: &[u8]) -> Result<()> {
-        let full_path = self.repo_path.join(rel_path);
-        if let Some(parent) = full_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&full_path, data)?;
-        Ok(())
+        self.fs.write_file(rel_path, data)
     }
 
     fn read_file(&self, rel_path: &str) -> Result<Vec<u8>> {
-        let full_path = self.repo_path.join(rel_path);
-        std::fs::read(&full_path).with_context(|| format!("could not read {}", full_path.display()))
+        self.fs.read_file(rel_path)
     }
 
     fn exists(&self, rel_path: &str) -> bool {
-        self.repo_path.join(rel_path).exists()
+        self.fs.exists(rel_path)
     }
 
     fn list_files(&self, prefix: &str) -> Result<Vec<String>> {
-        let dir = self.repo_path.join(prefix);
-        if !dir.exists() {
-            return Ok(Vec::new());
-        }
-        let mut files = Vec::new();
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            if entry.file_type()?.is_file()
-                && let Some(name) = entry.file_name().to_str()
-            {
-                files.push(format!("{prefix}/{name}"));
-            }
-        }
-        Ok(files)
+        self.fs.list_files(prefix)
     }
 
-    fn sync_up(&self) -> Result<()> {
-        self.commit("clync sync")?;
-        self.push_remote()
+    fn file_size(&self, rel_path: &str) -> Result<u64> {
+        self.fs.file_size(rel_path)
+    }
+
+    fn atomic_write(&self, rel_path: &str, data: &[u8]) -> Result<()> {
+        self.fs.atomic_write(rel_path, data)
     }
 
     fn sync_down(&self) -> Result<()> {
         self.pull_remote()
     }
 
-    fn root(&self) -> &Path {
-        &self.repo_path
+    fn sync_up(&self, message: &str) -> Result<()> {
+        self.commit(message)?;
+        self.push_remote()
+    }
+
+    fn lock(&self) -> Result<Box<dyn std::any::Any>> {
+        self.fs.lock()
+    }
+
+    fn try_lock(&self) -> Result<Box<dyn std::any::Any>> {
+        self.fs.try_lock()
+    }
+
+    fn local_path(&self) -> Option<&Path> {
+        Some(self.fs.root())
     }
 }
 
@@ -246,7 +208,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
-            .join("clync-storage-test")
+            .join("clync-git-store-test")
             .join(name)
             .join(format!("{}", std::process::id()));
         if dir.exists() {
@@ -260,10 +222,10 @@ mod tests {
     fn init_repo_creates_git_dir() {
         let dir = temp_dir("init_repo");
         let repo_path = dir.join("repo");
-        let storage = GitStorage::init_repo(&repo_path).unwrap();
+        let store = GitStore::init_repo(&repo_path).unwrap();
         assert!(repo_path.join(".git").exists());
         assert!(repo_path.join(".gitignore").exists());
-        assert_eq!(storage.root(), repo_path);
+        assert_eq!(store.root(), repo_path);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -271,8 +233,8 @@ mod tests {
     fn init_repo_idempotent() {
         let dir = temp_dir("init_idem");
         let repo_path = dir.join("repo");
-        GitStorage::init_repo(&repo_path).unwrap();
-        GitStorage::init_repo(&repo_path).unwrap();
+        GitStore::init_repo(&repo_path).unwrap();
+        GitStore::init_repo(&repo_path).unwrap();
         assert!(repo_path.join(".git").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -280,11 +242,11 @@ mod tests {
     #[test]
     fn write_read_exists() {
         let dir = temp_dir("write_read");
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        storage.write_file("test.txt", b"hello").unwrap();
-        assert!(storage.exists("test.txt"));
-        assert!(!storage.exists("missing.txt"));
-        let data = storage.read_file("test.txt").unwrap();
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        store.write_file("test.txt", b"hello").unwrap();
+        assert!(store.exists("test.txt"));
+        assert!(!store.exists("missing.txt"));
+        let data = store.read_file("test.txt").unwrap();
         assert_eq!(data, b"hello");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -292,19 +254,19 @@ mod tests {
     #[test]
     fn write_creates_subdirs() {
         let dir = temp_dir("subdirs");
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        storage.write_file("a/b/c.txt", b"nested").unwrap();
-        assert!(storage.exists("a/b/c.txt"));
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        store.write_file("a/b/c.txt", b"nested").unwrap();
+        assert!(store.exists("a/b/c.txt"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn list_files_works() {
         let dir = temp_dir("list_files");
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        storage.write_file("sessions/a.txt", b"a").unwrap();
-        storage.write_file("sessions/b.txt", b"b").unwrap();
-        let files = storage.list_files("sessions").unwrap();
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        store.write_file("sessions/a.txt", b"a").unwrap();
+        store.write_file("sessions/b.txt", b"b").unwrap();
+        let files = store.list_files("sessions").unwrap();
         assert_eq!(files.len(), 2);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -312,8 +274,8 @@ mod tests {
     #[test]
     fn list_files_empty() {
         let dir = temp_dir("list_empty");
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        let files = storage.list_files("nonexistent").unwrap();
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        let files = store.list_files("nonexistent").unwrap();
         assert!(files.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -321,16 +283,16 @@ mod tests {
     #[test]
     fn has_remote_false_for_new_repo() {
         let dir = temp_dir("no_remote");
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        assert!(!storage.has_remote());
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        assert!(!store.has_remote());
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn get_remote_url_none_for_new_repo() {
         let dir = temp_dir("no_remote_url");
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        assert!(storage.get_remote_url().is_none());
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        assert!(store.get_remote_url().is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -343,46 +305,46 @@ mod tests {
             .arg(&bare)
             .output()
             .unwrap();
-
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        storage.add_remote(bare.to_str().unwrap()).unwrap();
-        assert!(storage.has_remote());
-        assert!(storage.get_remote_url().is_some());
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        store.add_remote(bare.to_str().unwrap()).unwrap();
+        assert!(store.has_remote());
+        assert!(store.get_remote_url().is_some());
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn lock_and_try_lock() {
         let dir = temp_dir("lock");
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        let _lock = storage.lock().unwrap();
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        let _lock = store.lock().unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }
 
     fn set_git_test_author(repo: &Path) {
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@clync"])
-            .current_dir(repo)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.name", "test"])
-            .current_dir(repo)
-            .output()
-            .unwrap();
+        for args in [
+            &["config", "user.email", "test@clync"][..],
+            &["config", "user.name", "test"],
+            &["config", "commit.gpgsign", "false"],
+        ] {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+        }
     }
 
     #[test]
     fn commit_with_changes() {
         let dir = temp_dir("commit");
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        set_git_test_author(storage.root());
-        storage.write_file("file.txt", b"content").unwrap();
-        storage.commit("test commit").unwrap();
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        set_git_test_author(store.root());
+        store.write_file("file.txt", b"content").unwrap();
+        store.commit("test commit").unwrap();
 
         let log = std::process::Command::new("git")
             .args(["log", "--oneline"])
-            .current_dir(storage.root())
+            .current_dir(store.root())
             .output()
             .unwrap();
         let stdout = String::from_utf8_lossy(&log.stdout);
@@ -393,27 +355,46 @@ mod tests {
     #[test]
     fn commit_no_changes_is_noop() {
         let dir = temp_dir("commit_noop");
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        set_git_test_author(storage.root());
-        storage.write_file("file.txt", b"content").unwrap();
-        storage.commit("first").unwrap();
-        storage.commit("second should be noop").unwrap();
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        set_git_test_author(store.root());
+        store.write_file("file.txt", b"content").unwrap();
+        store.commit("first").unwrap();
+        store.commit("second should be noop").unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn pull_remote_no_remote_is_ok() {
         let dir = temp_dir("pull_no_remote");
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        storage.pull_remote().unwrap();
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        store.pull_remote().unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn push_remote_no_remote_is_ok() {
         let dir = temp_dir("push_no_remote");
-        let storage = GitStorage::init_repo(&dir.join("repo")).unwrap();
-        storage.push_remote().unwrap();
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        store.push_remote().unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn file_size_works() {
+        let dir = temp_dir("file_size");
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        store.write_file("test.txt", b"hello").unwrap();
+        assert_eq!(store.file_size("test.txt").unwrap(), 5);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn atomic_write_works() {
+        let dir = temp_dir("atomic_write");
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        store.atomic_write("test.txt", b"atomic").unwrap();
+        assert_eq!(store.read_file("test.txt").unwrap(), b"atomic");
+        assert!(!store.exists("test.txt.tmp"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

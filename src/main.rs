@@ -16,7 +16,7 @@ mod repo_meta;
 mod resolver;
 mod scanner;
 pub(crate) mod secret;
-mod storage;
+pub(crate) mod store;
 mod sync;
 mod synclog;
 
@@ -58,7 +58,7 @@ enum Cmd {
     /// Initialize config, generate encryption key, set up sync repo.
     /// Run without flags for interactive setup.
     Init {
-        /// Path to the sync git repo
+        /// Path to the sync repo or folder
         #[arg(long)]
         repo: Option<PathBuf>,
 
@@ -69,12 +69,16 @@ enum Cmd {
         /// Skip encryption (store files in plain text)
         #[arg(long)]
         no_encrypt: bool,
+
+        /// Storage backend: git (default), folder, or s3
+        #[arg(long, default_value = "git")]
+        storage: String,
     },
     /// Encrypt and commit changed data to the sync repo
     Push {
-        /// Skip git commit/push (overrides auto_git config)
+        /// Skip sync_up (git push / remote sync)
         #[arg(long)]
-        no_git: bool,
+        no_sync: bool,
 
         /// Only sync sessions modified within N days
         #[arg(long, value_name = "DAYS")]
@@ -86,9 +90,9 @@ enum Cmd {
     },
     /// Decrypt and smart-merge remote data into local
     Pull {
-        /// Skip git pull (overrides auto_git config)
+        /// Skip sync_down (git pull / remote sync)
         #[arg(long)]
-        no_git: bool,
+        no_sync: bool,
 
         /// Only sync sessions modified within N days
         #[arg(long, value_name = "DAYS")]
@@ -100,9 +104,9 @@ enum Cmd {
     },
     /// Pull then push (bidirectional sync)
     Sync {
-        /// Skip git operations (overrides auto_git config)
+        /// Skip remote sync operations
         #[arg(long)]
-        no_git: bool,
+        no_sync: bool,
 
         /// Only sync sessions modified within N days
         #[arg(long, value_name = "DAYS")]
@@ -192,7 +196,7 @@ pub(crate) enum ConfigAction {
     Path,
     /// Set a config value (e.g. targets.skills true)
     Set {
-        /// Key in dot notation (e.g. targets.skills, sync.include_companion_dirs)
+        /// Key in dot notation (e.g. targets.skills)
         key: String,
         /// Value to set
         value: String,
@@ -208,25 +212,26 @@ fn main() -> Result<()> {
             repo,
             onepassword,
             no_encrypt,
-        } => cmd::init::cmd_init(repo, onepassword, no_encrypt, &input),
+            storage,
+        } => cmd::init::cmd_init(repo, onepassword, no_encrypt, &storage, &input),
         Cmd::Push {
-            no_git,
+            no_sync,
             max_age,
             max_size,
-        } => cmd::sync_cmd::cmd_push(no_git, cmd::build_filter(max_age, max_size)),
+        } => cmd::sync_cmd::cmd_push(no_sync, cmd::build_filter(max_age, max_size)),
         Cmd::Pull {
-            no_git,
+            no_sync,
             max_age,
             max_size,
-        } => cmd::sync_cmd::cmd_pull(no_git, cmd::build_filter(max_age, max_size)),
+        } => cmd::sync_cmd::cmd_pull(no_sync, cmd::build_filter(max_age, max_size)),
         Cmd::Sync {
-            no_git,
+            no_sync,
             max_age,
             max_size,
         } => {
             let filter = cmd::build_filter(max_age, max_size);
-            cmd::sync_cmd::cmd_pull(no_git, filter.clone())?;
-            cmd::sync_cmd::cmd_push(no_git, filter)
+            cmd::sync_cmd::cmd_pull(no_sync, filter.clone())?;
+            cmd::sync_cmd::cmd_push(no_sync, filter)
         }
         Cmd::Status { max_age } => cmd::sync_cmd::cmd_status(cmd::build_filter(max_age, None)),
         Cmd::List {

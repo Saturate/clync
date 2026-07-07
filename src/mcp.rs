@@ -186,26 +186,26 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "sync_push",
-            "description": "Encrypt and push changed sessions and extras (memories, settings, etc.) to the sync repo.",
+            "description": "Encrypt and push changed sessions and extras (memories, settings, etc.) to the sync store.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "git": {
+                    "sync": {
                         "type": "boolean",
-                        "description": "Also git add, commit, and push to remote (default: auto_git config, usually true)"
+                        "description": "Also sync to remote (git push, S3 upload, etc.). Default: auto_push config value."
                     }
                 }
             }
         },
         {
             "name": "sync_pull",
-            "description": "Pull and decrypt sessions from sync repo, smart-merging any diverged sessions using UUID-based conversation trees.",
+            "description": "Pull and decrypt sessions from sync store, smart-merging any diverged sessions using UUID-based conversation trees.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "git": {
+                    "sync": {
                         "type": "boolean",
-                        "description": "Also git pull from remote first (default: auto_git config, usually true)"
+                        "description": "Also sync from remote first (git pull, S3 download, etc.). Default: auto_push config value."
                     }
                 }
             }
@@ -345,9 +345,9 @@ fn call_tool(name: &str, args: &Value) -> Result<String> {
         "sync_status" => {
             let config = Config::load()?;
             let cipher = crate::crypto::Cipher::from_config(&config.encryption)?;
-            let storage = crate::storage::GitStorage::new(config.sync.repo.clone());
+            let store = crate::store::create_store(&config)?;
             let filter = ScanFilter::default();
-            let result = crate::sync::status(&config, &cipher, &filter, &storage)?;
+            let result = crate::sync::status(&config, &cipher, &filter, store.as_ref())?;
 
             let mut output = String::new();
             if result.local_only.is_empty()
@@ -385,11 +385,11 @@ fn call_tool(name: &str, args: &Value) -> Result<String> {
         }
         "sync_push" => {
             let config = Config::load()?;
-            let git = args
-                .get("git")
+            let do_sync = args
+                .get("sync")
                 .and_then(|v| v.as_bool())
-                .unwrap_or(config.sync.auto_git);
-            let r = crate::cmd::do_push(git)?;
+                .unwrap_or(config.sync.storage.auto_push());
+            let r = crate::cmd::do_push(do_sync)?;
             Ok(format!(
                 "pushed {} sessions ({} unchanged), {} extras, {} memories",
                 r.sessions, r.skipped, r.extras, r.memories
@@ -397,11 +397,11 @@ fn call_tool(name: &str, args: &Value) -> Result<String> {
         }
         "sync_pull" => {
             let config = Config::load()?;
-            let git = args
-                .get("git")
+            let do_sync = args
+                .get("sync")
                 .and_then(|v| v.as_bool())
-                .unwrap_or(config.sync.auto_git);
-            let r = crate::cmd::do_pull(git)?;
+                .unwrap_or(config.sync.storage.auto_push());
+            let r = crate::cmd::do_pull(do_sync)?;
             Ok(format!(
                 "pulled {} new, {} merged, {} unchanged, {} extras, {} memories",
                 r.pulled, r.merged, r.skipped, r.extras, r.memories
@@ -410,7 +410,10 @@ fn call_tool(name: &str, args: &Value) -> Result<String> {
         "sync_log" => {
             let config = Config::load()?;
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-            let entries = crate::synclog::read_recent(&config.sync.repo, limit)?;
+            let store_path = config.storage_path().ok_or_else(|| {
+                anyhow::anyhow!("log requires local storage (not available with S3 backend)")
+            })?;
+            let entries = crate::synclog::read_recent(store_path, limit)?;
             Ok(serde_json::to_string_pretty(&entries)?)
         }
         "config_show" => tool_config_show(),
@@ -442,18 +445,21 @@ fn tool_config_show() -> Result<String> {
         }
         crate::config::EncryptionConfig::None => "none (plain text)".into(),
     };
-    let lfs = if config.sync.git.lfs_threshold == 0 {
-        "disabled".to_string()
-    } else {
-        format!(
-            "{}MB threshold",
-            config.sync.git.lfs_threshold / (1024 * 1024)
-        )
+    let storage_desc = match &config.sync.storage {
+        crate::config::StorageConfig::Git {
+            path, auto_push, ..
+        } => format!("git ({}), auto_push: {auto_push}", path.display()),
+        crate::config::StorageConfig::Folder { path } => {
+            format!("folder ({})", path.display())
+        }
+        #[cfg(feature = "s3")]
+        crate::config::StorageConfig::S3 { bucket, region, .. } => {
+            format!("s3 ({bucket}, {region})")
+        }
     };
     let t = &config.targets;
     Ok(format!(
-        "sync repo: {}\nclaude dir: {}\nencryption: {}\ncompanion dirs: {}\ngit lfs: {lfs}\n\ntargets:\n  sessions: {}\n  memories: {}\n  settings: {}\n  commands: {}\n  skills: {}\n  global CLAUDE.md: {}",
-        config.sync.repo.display(),
+        "storage: {storage_desc}\nclaude dir: {}\nencryption: {}\ncompanion dirs: {}\n\ntargets:\n  sessions: {}\n  memories: {}\n  settings: {}\n  commands: {}\n  skills: {}\n  global CLAUDE.md: {}",
         config.sync.claude_dir.display(),
         enc_method,
         config.sync.include_companion_dirs,
