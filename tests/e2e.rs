@@ -1787,3 +1787,74 @@ fn folder_storage_init_and_push() {
         "manifest written"
     );
 }
+
+#[test]
+fn mv_session_between_projects() {
+    let env = TestEnv::new("mv_session");
+    let a = env.machine("a");
+    a.init();
+
+    a.write_session(
+        "proj-alpha",
+        "s1",
+        &[
+            &mode_entry(),
+            &msg("m1", None, 100, "user", "work on alpha"),
+        ],
+    );
+
+    // Write a memory file and reference it in the session via /memory/ path
+    a.write_memory("proj-alpha", "alpha-notes.md", "important alpha notes\n");
+    // Append a fake tool result referencing the memory file
+    let memory_ref = r#"{"type":"assistant","uuid":"m2","timestamp":200,"message":{"content":"Wrote /memory/alpha-notes.md"}}"#;
+    let session_path = a.projects_dir().join("proj-alpha").join("s1.jsonl");
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&session_path)
+        .unwrap();
+    std::io::Write::write_all(&mut file, format!("{memory_ref}\n").as_bytes()).unwrap();
+
+    // Move session to a target path
+    let target_path = a.home.join("code").join("proj-beta");
+    let out = a.run_ok(&["mv", "s1", &target_path.to_string_lossy()]);
+    assert!(out.contains("moved"), "mv output: {out}");
+    assert!(out.contains("alpha-notes.md"), "should move memory: {out}");
+
+    // Session should be gone from proj-alpha
+    assert!(!session_path.exists(), "session gone from proj-alpha");
+
+    // Find the session in whatever encoded dir it ended up in
+    let moved_session: Vec<_> = walkdir::WalkDir::new(a.projects_dir())
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy() == "s1.jsonl")
+        .collect();
+    assert_eq!(moved_session.len(), 1, "session exists in new project");
+
+    // Memory should be moved too
+    let moved_memory: Vec<_> = walkdir::WalkDir::new(a.projects_dir())
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy() == "alpha-notes.md")
+        .filter(|e| e.path().to_string_lossy().contains("proj-beta"))
+        .collect();
+    assert_eq!(moved_memory.len(), 1, "memory moved with session");
+
+    // Memory should be gone from proj-alpha
+    let alpha_memory = a
+        .projects_dir()
+        .join("proj-alpha")
+        .join("memory")
+        .join("alpha-notes.md");
+    assert!(!alpha_memory.exists(), "memory gone from proj-alpha");
+}
+
+#[test]
+fn mv_session_no_match() {
+    let env = TestEnv::new("mv_no_match");
+    let a = env.machine("a");
+    a.init();
+
+    let output = a.run(&["mv", "nonexistent-uuid", "/tmp/whatever"]);
+    assert!(!output.status.success(), "should fail for nonexistent UUID");
+}
