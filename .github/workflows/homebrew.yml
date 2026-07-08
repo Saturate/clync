@@ -3,18 +3,89 @@ name: Homebrew
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   update-tap:
     name: Update Homebrew tap
     runs-on: ubuntu-latest
     steps:
-      - name: Update formula
-        uses: mislav/bump-homebrew-formula-action@v3
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
         with:
-          formula-name: clync
-          homebrew-tap: Saturate/homebrew-clync
-          tag-name: ${{ github.event.release.tag_name }}
-          download-url: https://github.com/Saturate/clync/releases/download/${{ github.event.release.tag_name }}/clync-x86_64-unknown-linux-gnu.tar.gz
+          app-id: ${{ secrets.SATURATE_CI_APP_ID }}
+          private-key: ${{ secrets.SATURATE_CI_PRIVATE_KEY }}
+          repositories: homebrew-clync
+
+      - name: Update Homebrew formula
         env:
-          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [[ "$GITHUB_REF_NAME" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(gh release view --repo Saturate/clync --json tagName --jq '.tagName' | sed 's/^v//')
+          fi
+          echo "Updating formula to version $VERSION"
+
+          AARCH64_MACOS_URL="https://github.com/Saturate/clync/releases/download/v${VERSION}/clync-aarch64-apple-darwin.tar.gz"
+          X86_64_MACOS_URL="https://github.com/Saturate/clync/releases/download/v${VERSION}/clync-x86_64-apple-darwin.tar.gz"
+          AARCH64_LINUX_URL="https://github.com/Saturate/clync/releases/download/v${VERSION}/clync-aarch64-unknown-linux-gnu.tar.gz"
+          X86_64_LINUX_URL="https://github.com/Saturate/clync/releases/download/v${VERSION}/clync-x86_64-unknown-linux-gnu.tar.gz"
+
+          AARCH64_MACOS_SHA=$(curl -fSL "$AARCH64_MACOS_URL" | shasum -a 256 | cut -d' ' -f1)
+          X86_64_MACOS_SHA=$(curl -fSL "$X86_64_MACOS_URL" | shasum -a 256 | cut -d' ' -f1)
+          AARCH64_LINUX_SHA=$(curl -fSL "$AARCH64_LINUX_URL" | shasum -a 256 | cut -d' ' -f1)
+          X86_64_LINUX_SHA=$(curl -fSL "$X86_64_LINUX_URL" | shasum -a 256 | cut -d' ' -f1)
+
+          cat > /tmp/clync.rb << FORMULA
+          class Clync < Formula
+            desc "Encrypted sync for Claude Code across machines"
+            homepage "https://github.com/Saturate/clync"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${AARCH64_MACOS_URL}"
+                sha256 "${AARCH64_MACOS_SHA}"
+              else
+                url "${X86_64_MACOS_URL}"
+                sha256 "${X86_64_MACOS_SHA}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${AARCH64_LINUX_URL}"
+                sha256 "${AARCH64_LINUX_SHA}"
+              else
+                url "${X86_64_LINUX_URL}"
+                sha256 "${X86_64_LINUX_SHA}"
+              end
+            end
+
+            def install
+              bin.install "clync"
+            end
+
+            test do
+              assert_match "clync", shell_output("#{bin}/clync --version")
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' /tmp/clync.rb
+
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/Saturate/homebrew-clync.git" /tmp/tap
+          cp /tmp/clync.rb /tmp/tap/Formula/clync.rb
+
+          cd /tmp/tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/clync.rb
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "clync ${VERSION}"
+          git push
