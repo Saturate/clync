@@ -182,6 +182,14 @@ enum Cmd {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+    /// Move a session to a different project directory
+    Mv {
+        /// UUID or UUID prefix of the session to move
+        uuid: String,
+
+        /// Target project path (e.g. ~/code/my-project)
+        target: String,
+    },
     /// Run as MCP server (stdio JSON-RPC)
     Mcp,
 }
@@ -249,6 +257,7 @@ fn main() -> Result<()> {
             no_encrypt,
         } => cmd::join::cmd_join(url, repo, onepassword, no_encrypt, &input),
         Cmd::Reset { keep_repo, yes } => cmd::init::cmd_reset(keep_repo, yes, &input),
+        Cmd::Mv { uuid, target } => cmd::cmd_mv(&uuid, &target),
         Cmd::Mcp => mcp::run_mcp_server(),
     }
 }

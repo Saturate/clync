@@ -5,8 +5,9 @@ pub mod sync_cmd;
 pub use sync_cmd::{do_pull, do_push};
 
 use anyhow::{Context, Result, bail};
+use std::path::PathBuf;
 
-use crate::config::{Config, EncryptionConfig};
+use crate::config::{self, Config, EncryptionConfig};
 use crate::scanner::ScanFilter;
 use crate::synclog;
 
@@ -281,6 +282,160 @@ pub(crate) fn format_age(mtime: u64) -> String {
     } else {
         format!("{}d ago", diff / 86400)
     }
+}
+
+pub fn cmd_mv(uuid_prefix: &str, target: &str) -> Result<()> {
+    let claude_dir = config::home_dir()
+        .context("cannot determine home directory")?
+        .join(".claude");
+    let projects_dir = claude_dir.join("projects");
+
+    let filter = ScanFilter::default();
+    let sessions = crate::scanner::scan_sessions(&projects_dir, &filter)?;
+
+    let matches: Vec<_> = sessions
+        .iter()
+        .filter(|s| s.uuid.starts_with(uuid_prefix))
+        .collect();
+
+    if matches.is_empty() {
+        bail!("no session matching '{uuid_prefix}'");
+    }
+    let session = if matches.len() == 1 {
+        matches[0]
+    } else {
+        let same_uuid = matches.windows(2).all(|w| w[0].uuid == w[1].uuid);
+        if !same_uuid {
+            for s in &matches {
+                println!("  {} [{}]", short_uuid(&s.uuid), s.entry.project_path);
+            }
+            bail!(
+                "ambiguous prefix '{uuid_prefix}', {} distinct sessions match",
+                matches.len()
+            );
+        }
+        let home = config::home_dir()
+            .map(|h| h.to_string_lossy().replace('/', "-"))
+            .unwrap_or_default();
+        let home_prefix = format!("{}-", home.trim_start_matches('-'));
+        let local = matches.iter().find(|s| {
+            let dir = s.project_dir_name.trim_start_matches('-');
+            dir.starts_with(&home_prefix)
+        });
+        if let Some(s) = local {
+            s
+        } else {
+            for s in &matches {
+                println!("  {} [{}]", short_uuid(&s.uuid), s.entry.project_path);
+            }
+            bail!(
+                "ambiguous prefix '{uuid_prefix}', {} matches",
+                matches.len()
+            );
+        }
+    };
+    let target_path = config::expand_path(&PathBuf::from(target));
+    let encoded = target_path.to_string_lossy().replace('/', "-");
+
+    let target_dir = projects_dir.join(&encoded);
+    std::fs::create_dir_all(&target_dir)?;
+
+    let src_jsonl = &session.jsonl_path;
+    let dst_jsonl = target_dir.join(format!("{}.jsonl", session.uuid));
+
+    if dst_jsonl.exists() {
+        bail!(
+            "session {} already exists in target project",
+            short_uuid(&session.uuid)
+        );
+    }
+
+    std::fs::rename(src_jsonl, &dst_jsonl)?;
+
+    if let Some(ref companion) = session.companion_dir
+        && companion.exists()
+    {
+        let dst_companion = target_dir.join(&session.uuid);
+        std::fs::rename(companion, &dst_companion)?;
+    }
+
+    println!(
+        "moved {} from [{}] to [{}]",
+        short_uuid(&session.uuid),
+        session.entry.project_path,
+        encoded
+    );
+
+    let src_project_dir = src_jsonl.parent().unwrap_or(std::path::Path::new("."));
+    let src_memory_dir = src_project_dir.join("memory");
+    if src_memory_dir.exists() {
+        let memory_files = find_session_memories(&dst_jsonl, &src_memory_dir);
+        if !memory_files.is_empty() {
+            let dst_memory_dir = target_dir.join("memory");
+            std::fs::create_dir_all(&dst_memory_dir)?;
+            for file in &memory_files {
+                let name = file.file_name().unwrap_or_default();
+                let dst = dst_memory_dir.join(name);
+                if !dst.exists() {
+                    std::fs::rename(file, &dst)?;
+                    println!("  moved memory: {}", name.to_string_lossy());
+                }
+            }
+            update_memory_index(&src_memory_dir, &memory_files)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn find_session_memories(
+    session_jsonl: &std::path::Path,
+    memory_dir: &std::path::Path,
+) -> Vec<PathBuf> {
+    let content = match std::fs::read_to_string(session_jsonl) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut found = Vec::new();
+    let entries = match std::fs::read_dir(memory_dir) {
+        Ok(e) => e,
+        Err(_) => return found,
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == "MEMORY.md" {
+            continue;
+        }
+        let search = format!("/memory/{name}");
+        if content.contains(&search) {
+            found.push(entry.path());
+        }
+    }
+    found
+}
+
+fn update_memory_index(memory_dir: &std::path::Path, moved_files: &[PathBuf]) -> Result<()> {
+    let index_path = memory_dir.join("MEMORY.md");
+    if !index_path.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&index_path)?;
+    let moved_names: Vec<String> = moved_files
+        .iter()
+        .filter_map(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .collect();
+
+    let filtered: String = content
+        .lines()
+        .filter(|line| !moved_names.iter().any(|name| line.contains(name)))
+        .map(|line| format!("{line}\n"))
+        .collect();
+
+    std::fs::write(&index_path, filtered)?;
+    Ok(())
 }
 
 pub(crate) fn format_size(bytes: u64) -> String {
