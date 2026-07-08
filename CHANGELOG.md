@@ -48,3 +48,15 @@ All notable changes to clync will be documented in this file.
 ### Fixed
 
 - Better error messages on decryption failures
+
+## [0.4.0] - 2026-07-08
+### Added
+
+- **clync**: Support for multiple storage backends: git (default), local folder (NAS/Dropbox/USB), and S3-compatible cloud storage (AWS, R2, MinIO)
+- **clync**: Move sessions between project directories with clync mv
+
+### Changed
+
+- **clync**: Internal architectural changes
+
+[0.4.0]: https://github.com/Saturate/clync/compare/v0.3.0...v0.4.0
