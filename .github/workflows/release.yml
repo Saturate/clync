@@ -53,7 +53,6 @@ jobs:
           OLD_VERSION: ${{ steps.before.outputs.version }}
         run: |
           cargo changeset release --no-tags
-          cargo check 2>/dev/null || true
           version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           if [ -z "$version" ]; then
             echo "Failed to extract version from Cargo.toml" >&2
@@ -65,12 +64,10 @@ jobs:
           fi
           echo "version=$version" >> $GITHUB_OUTPUT
 
-      - name: Commit and tag
+      - name: Tag and push
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          git add Cargo.toml Cargo.lock CHANGELOG.md .changeset/
-          git commit -m "release: v${RELEASE_VERSION}"
           git tag "v${RELEASE_VERSION}"
           git push origin main --tags
 
