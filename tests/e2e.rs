@@ -114,8 +114,8 @@ impl Machine {
     fn join_encrypted(&self) {
         // Read the key from this machine's config to pipe it as stdin
         let key_path = self.config.join("clync").join("key.txt");
-        let key = std::fs::read_to_string(&key_path)
-            .expect("key file must exist before join_encrypted");
+        let key =
+            std::fs::read_to_string(&key_path).expect("key file must exist before join_encrypted");
         // Pipe: key for prompt, then "y" for "pull sessions now?"
         let stdin_data = format!("{}\ny\n", key.trim());
         let mut child = Command::new(clync())
@@ -134,7 +134,12 @@ impl Machine {
             .unwrap();
         {
             use std::io::Write;
-            child.stdin.take().unwrap().write_all(stdin_data.as_bytes()).unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(stdin_data.as_bytes())
+                .unwrap();
         }
         let output = child.wait_with_output().unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1936,10 +1941,7 @@ fn encrypted_push_pull_roundtrip() {
     );
 
     let manifest_file = a.sync_repo.join("manifest.json.age");
-    assert!(
-        manifest_file.exists(),
-        "encrypted manifest should exist"
-    );
+    assert!(manifest_file.exists(), "encrypted manifest should exist");
 
     let status = a.status();
     assert!(status.contains("in sync"), "status: {status}");
@@ -1987,10 +1989,7 @@ fn encrypted_merge_diverged() {
     a.write_session(
         "proj",
         "s1",
-        &[
-            &mode_entry(),
-            &msg("m1", None, 100, "user", "initial"),
-        ],
+        &[&mode_entry(), &msg("m1", None, 100, "user", "initial")],
     );
     a.push();
 
@@ -2037,10 +2036,7 @@ fn companion_dir_sync() {
     a.write_session(
         "proj",
         "s1",
-        &[
-            &mode_entry(),
-            &msg("m1", None, 100, "user", "hello"),
-        ],
+        &[&mode_entry(), &msg("m1", None, 100, "user", "hello")],
     );
 
     // Create a companion directory (same name as session UUID, without .jsonl)
@@ -2075,7 +2071,11 @@ fn companion_dir_sync() {
         .collect();
     let b_proj = &b_proj_dirs[0].path();
     let b_companion = b_proj.join("s1");
-    assert!(b_companion.exists(), "companion dir should be pulled: checked {}", b_companion.display());
+    assert!(
+        b_companion.exists(),
+        "companion dir should be pulled: checked {}",
+        b_companion.display()
+    );
     assert!(
         b_companion.join("artifact.txt").exists(),
         "companion file should exist"
@@ -2099,10 +2099,7 @@ fn selective_targets_partial() {
     a.write_session(
         "proj",
         "s1",
-        &[
-            &mode_entry(),
-            &msg("m1", None, 100, "user", "hello"),
-        ],
+        &[&mode_entry(), &msg("m1", None, 100, "user", "hello")],
     );
 
     a.push();
@@ -2120,5 +2117,8 @@ fn selective_targets_partial() {
 
     // Memories should NOT be pulled (disabled)
     let memory_path = b.projects_dir().join("proj").join("memory").join("note.md");
-    assert!(!memory_path.exists(), "memories should not be pulled when disabled");
+    assert!(
+        !memory_path.exists(),
+        "memories should not be pulled when disabled"
+    );
 }

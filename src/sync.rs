@@ -682,10 +682,12 @@ mod tests {
         let restore_dir = dir.join("restored");
         std::fs::create_dir_all(&restore_dir).unwrap();
         untar_directory(&tar_data, &restore_dir.join("sess-456")).unwrap();
-        assert!(restore_dir
-            .join("sess-456")
-            .join("tool-output.txt")
-            .exists());
+        assert!(
+            restore_dir
+                .join("sess-456")
+                .join("tool-output.txt")
+                .exists()
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

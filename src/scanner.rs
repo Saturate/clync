@@ -133,10 +133,13 @@ mod tests {
     fn write_session(dir: &Path, project: &str, uuid: &str) {
         let project_dir = dir.join(project);
         std::fs::create_dir_all(&project_dir).unwrap();
-        let content = format!(
-            r#"{{"uuid":"{uuid}","type":"human","timestamp":1700000000,"text":"hello"}}"#
-        );
-        std::fs::write(project_dir.join(format!("{uuid}.jsonl")), content.as_bytes()).unwrap();
+        let content =
+            format!(r#"{{"uuid":"{uuid}","type":"human","timestamp":1700000000,"text":"hello"}}"#);
+        std::fs::write(
+            project_dir.join(format!("{uuid}.jsonl")),
+            content.as_bytes(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -232,11 +235,7 @@ mod tests {
         write_session(&dir, "project-d", "small-uuid");
         let big_content = "x".repeat(10_000);
         let project_dir = dir.join("project-d");
-        std::fs::write(
-            project_dir.join("big-uuid.jsonl"),
-            big_content.as_bytes(),
-        )
-        .unwrap();
+        std::fs::write(project_dir.join("big-uuid.jsonl"), big_content.as_bytes()).unwrap();
 
         let filter = ScanFilter {
             max_file_size: Some(1000),
@@ -261,10 +260,7 @@ mod tests {
         let old_time = std::time::SystemTime::now()
             .checked_sub(Duration::from_secs(1000 * 86400))
             .unwrap();
-        let _ = filetime::set_file_mtime(
-            &old_path,
-            filetime::FileTime::from_system_time(old_time),
-        );
+        let _ = filetime::set_file_mtime(&old_path, filetime::FileTime::from_system_time(old_time));
 
         let filter = ScanFilter {
             max_age_days: Some(30),
@@ -300,7 +296,10 @@ mod tests {
         let sessions = scan_sessions(&dir, &ScanFilter::default()).unwrap();
         assert_eq!(sessions.len(), 2);
 
-        let projects: Vec<&str> = sessions.iter().map(|s| s.project_dir_name.as_str()).collect();
+        let projects: Vec<&str> = sessions
+            .iter()
+            .map(|s| s.project_dir_name.as_str())
+            .collect();
         assert!(projects.contains(&"project-x"));
         assert!(projects.contains(&"project-y"));
 

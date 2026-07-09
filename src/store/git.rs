@@ -447,7 +447,9 @@ mod tests {
         set_git_test_author(store.root());
         store.add_remote(bare.to_str().unwrap()).unwrap();
 
-        store.write_file("sessions/test.jsonl", b"session data").unwrap();
+        store
+            .write_file("sessions/test.jsonl", b"session data")
+            .unwrap();
         store.sync_up("sync test").unwrap();
 
         // Verify pushed to bare by cloning
@@ -456,7 +458,9 @@ mod tests {
 
         // Modify via clone and push
         set_git_test_author(store2.root());
-        store2.write_file("sessions/new.jsonl", b"new session").unwrap();
+        store2
+            .write_file("sessions/new.jsonl", b"new session")
+            .unwrap();
         store2.sync_up("add new").unwrap();
 
         // sync_down in original

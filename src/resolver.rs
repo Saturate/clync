@@ -238,8 +238,7 @@ mod tests {
 
     #[test]
     fn resolve_project_dir_ambiguous_suffix_falls_through() {
-        let dir = std::env::temp_dir()
-            .join(format!("clync-resolve-ambig-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clync-resolve-ambig-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("Users-alice-code-myproject")).unwrap();
         std::fs::create_dir_all(dir.join("Users-bob-code-myproject")).unwrap();
 
@@ -253,8 +252,8 @@ mod tests {
 
     #[test]
     fn resolve_project_dir_by_remote_map_repo_name() {
-        let dir = std::env::temp_dir()
-            .join(format!("clync-resolve-reponame-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("clync-resolve-reponame-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut map = HashMap::new();
@@ -273,8 +272,7 @@ mod tests {
 
     #[test]
     fn build_remote_map_with_skips_files() {
-        let dir = std::env::temp_dir()
-            .join(format!("clync-map-skipfiles-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clync-map-skipfiles-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("project-alpha")).unwrap();
         std::fs::write(dir.join("not-a-dir.txt"), "file").unwrap();
 

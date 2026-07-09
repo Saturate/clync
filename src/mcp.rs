@@ -607,7 +607,10 @@ mod tests {
         let arr = tools.as_array().unwrap();
         for tool in arr {
             assert!(tool.get("name").is_some(), "tool missing name");
-            assert!(tool.get("description").is_some(), "tool missing description");
+            assert!(
+                tool.get("description").is_some(),
+                "tool missing description"
+            );
             assert!(
                 tool.get("inputSchema").is_some(),
                 "tool missing inputSchema"
