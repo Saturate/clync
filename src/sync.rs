@@ -83,7 +83,7 @@ pub fn push(
         && push_count > 0
         && let Some(root) = store.local_path()
     {
-        for (uuid, _) in manifest.sessions.iter() {
+        for uuid in manifest.sessions.keys() {
             let filename = session_filename(uuid, encrypted);
             let rel = format!("sessions/{filename}");
             if let Ok(size) = store.file_size(&rel)
