@@ -18,7 +18,7 @@ pub fn is_encrypted(config: &Config) -> bool {
 }
 
 pub fn is_safe_path_component(s: &str) -> bool {
-    if s.contains('/') || s.contains('\\') {
+    if s.is_empty() || s.contains('/') || s.contains('\\') || s.contains('\0') {
         return false;
     }
     !s.split('-').any(|seg| seg == "..")
@@ -111,4 +111,46 @@ pub fn restore_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Res
         count += restore_file(entry.path(), &dst, cipher)?;
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encrypted_name_adds_age_extension() {
+        assert_eq!(encrypted_name("file.json", true), "file.json.age");
+        assert_eq!(encrypted_name("file.json", false), "file.json");
+    }
+
+    #[test]
+    fn safe_path_rejects_empty() {
+        assert!(!is_safe_path_component(""));
+    }
+
+    #[test]
+    fn safe_path_rejects_slashes() {
+        assert!(!is_safe_path_component("a/b"));
+        assert!(!is_safe_path_component("a\\b"));
+    }
+
+    #[test]
+    fn safe_path_rejects_null_bytes() {
+        assert!(!is_safe_path_component("a\0b"));
+    }
+
+    #[test]
+    fn safe_path_rejects_traversal() {
+        assert!(!is_safe_path_component(".."));
+        assert!(!is_safe_path_component("foo-.."));
+        assert!(!is_safe_path_component("..-bar"));
+    }
+
+    #[test]
+    fn safe_path_accepts_valid_components() {
+        assert!(is_safe_path_component("session-abc123"));
+        assert!(is_safe_path_component("file.json"));
+        assert!(is_safe_path_component("a-b-c"));
+        assert!(is_safe_path_component(".hidden"));
+    }
 }

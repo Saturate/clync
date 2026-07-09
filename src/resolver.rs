@@ -235,4 +235,98 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn resolve_project_dir_ambiguous_suffix_falls_through() {
+        let dir = std::env::temp_dir()
+            .join(format!("clync-resolve-ambig-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Users-alice-code-myproject")).unwrap();
+        std::fs::create_dir_all(dir.join("Users-bob-code-myproject")).unwrap();
+
+        let map = HashMap::new();
+        let result = resolve_project_dir("code-myproject", &map, &dir);
+        // Two suffix matches means it can't pick one, falls through to repo name / candidate
+        assert!(result.is_some());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_project_dir_by_remote_map_repo_name() {
+        let dir = std::env::temp_dir()
+            .join(format!("clync-resolve-reponame-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut map = HashMap::new();
+        map.insert(
+            "github.com/user/myrepo".to_string(),
+            "Users-alice-code-myrepo".to_string(),
+        );
+
+        // The normalized_path "code-myrepo" decodes to repo name "myrepo",
+        // which matches the remote_map value suffix "-myrepo"
+        let result = resolve_project_dir("code-myrepo", &map, &dir);
+        assert_eq!(result, Some("Users-alice-code-myrepo".to_string()));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn build_remote_map_with_skips_files() {
+        let dir = std::env::temp_dir()
+            .join(format!("clync-map-skipfiles-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("project-alpha")).unwrap();
+        std::fs::write(dir.join("not-a-dir.txt"), "file").unwrap();
+
+        let remotes: HashMap<String, String> = [
+            (
+                "/project/alpha".to_string(),
+                "git@github.com:user/alpha.git".to_string(),
+            ),
+            (
+                "/not/a/dir.txt".to_string(),
+                "git@github.com:user/file.git".to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let map = build_remote_map_with(&dir, &|path: &str| remotes.get(path).cloned());
+        assert_eq!(map.len(), 1);
+        assert!(map.contains_key("github.com/user/alpha"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn normalize_remote_trailing_slashes_stripped() {
+        // trim_end_matches strips all trailing slashes, then .git suffix
+        assert_eq!(
+            normalize_remote("https://github.com/User/Repo.git///"),
+            "github.com/user/repo"
+        );
+        assert_eq!(
+            normalize_remote("https://github.com/User/Repo/"),
+            "github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn normalize_remote_mixed_case_preserved_in_path() {
+        // Normalization lowercases everything
+        assert_eq!(
+            normalize_remote("https://GitHub.COM/MyOrg/MyRepo.git"),
+            "github.com/myorg/myrepo"
+        );
+    }
+
+    #[test]
+    fn decode_project_dir_single_segment() {
+        assert_eq!(decode_project_dir("project"), "/project");
+    }
+
+    #[test]
+    fn git_remote_url_nonexistent_path() {
+        assert_eq!(git_remote_url("/nonexistent/path/to/repo"), None);
+    }
 }

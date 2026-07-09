@@ -397,4 +397,91 @@ mod tests {
         assert!(!store.exists("test.txt.tmp"));
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn push_and_pull_with_bare_remote() {
+        let dir = temp_dir("push_pull_bare");
+        let bare = dir.join("bare.git");
+        std::process::Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .arg(&bare)
+            .output()
+            .unwrap();
+
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        set_git_test_author(store.root());
+        store.add_remote(bare.to_str().unwrap()).unwrap();
+
+        store.write_file("data.txt", b"push test").unwrap();
+        store.commit("initial").unwrap();
+        store.push_remote().unwrap();
+
+        // Clone into a second repo and verify data arrived
+        let store2 = GitStore::clone_repo(bare.to_str().unwrap(), &dir.join("clone")).unwrap();
+        assert!(store2.exists("data.txt"));
+        assert_eq!(store2.read_file("data.txt").unwrap(), b"push test");
+
+        // Modify in clone, push, then pull in original
+        set_git_test_author(store2.root());
+        store2.write_file("data.txt", b"modified").unwrap();
+        store2.commit("update").unwrap();
+        store2.push_remote().unwrap();
+
+        store.pull_remote().unwrap();
+        assert_eq!(store.read_file("data.txt").unwrap(), b"modified");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sync_up_and_sync_down() {
+        let dir = temp_dir("sync_up_down");
+        let bare = dir.join("bare.git");
+        std::process::Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .arg(&bare)
+            .output()
+            .unwrap();
+
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        set_git_test_author(store.root());
+        store.add_remote(bare.to_str().unwrap()).unwrap();
+
+        store.write_file("sessions/test.jsonl", b"session data").unwrap();
+        store.sync_up("sync test").unwrap();
+
+        // Verify pushed to bare by cloning
+        let store2 = GitStore::clone_repo(bare.to_str().unwrap(), &dir.join("clone")).unwrap();
+        assert!(store2.exists("sessions/test.jsonl"));
+
+        // Modify via clone and push
+        set_git_test_author(store2.root());
+        store2.write_file("sessions/new.jsonl", b"new session").unwrap();
+        store2.sync_up("add new").unwrap();
+
+        // sync_down in original
+        store.sync_down().unwrap();
+        assert!(store.exists("sessions/new.jsonl"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn local_path_returns_root() {
+        let dir = temp_dir("local_path");
+        let repo_path = dir.join("repo");
+        let store = GitStore::init_repo(&repo_path).unwrap();
+        assert_eq!(store.local_path(), Some(repo_path.as_path()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lock_and_try_lock_exclusive() {
+        let dir = temp_dir("lock_exclusive");
+        let store = GitStore::init_repo(&dir.join("repo")).unwrap();
+        let _lock = store.lock().unwrap();
+        // try_lock should fail while locked
+        assert!(store.try_lock().is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

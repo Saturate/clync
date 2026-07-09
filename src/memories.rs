@@ -379,4 +379,66 @@ mod tests {
         assert_eq!(extract_link_target("just a line"), None);
         assert_eq!(extract_link_target("# Header"), None);
     }
+
+    #[test]
+    fn merge_empty_local() {
+        let merged = merge_memory_md("", "- [A](a.md) - first\n");
+        assert!(merged.contains("- [A](a.md) - first"));
+    }
+
+    #[test]
+    fn merge_empty_remote() {
+        let merged = merge_memory_md("- [A](a.md) - first\n", "");
+        assert!(merged.contains("- [A](a.md) - first"));
+    }
+
+    #[test]
+    fn merge_both_empty() {
+        let merged = merge_memory_md("", "");
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn merge_keeps_local_when_longer() {
+        let local = "- [Note](note.md) - a long local description with details\n";
+        let remote = "- [Note](note.md) - short\n";
+        let merged = merge_memory_md(local, remote);
+        assert!(merged.contains("a long local description"));
+        assert!(!merged.contains("- short"));
+        assert_eq!(merged.matches("note.md").count(), 1);
+    }
+
+    #[test]
+    fn merge_deduplicates_remote_targets() {
+        let local = "- [A](a.md) - first\n";
+        let remote = "- [B](b.md) - second\n- [B](b.md) - also second\n";
+        let merged = merge_memory_md(local, remote);
+        assert_eq!(merged.matches("b.md").count(), 1);
+    }
+
+    #[test]
+    fn extract_link_target_no_closing_paren() {
+        assert_eq!(extract_link_target("- [Title](file.md"), None);
+    }
+
+    #[test]
+    fn extract_link_target_indented() {
+        assert_eq!(
+            extract_link_target("  - [Title](file.md) - desc"),
+            Some("file.md".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_link_target_not_a_list_item() {
+        assert_eq!(extract_link_target("[Title](file.md) - desc"), None);
+    }
+
+    #[test]
+    fn extract_link_target_with_path() {
+        assert_eq!(
+            extract_link_target("- [Title](sub/dir/file.md) - desc"),
+            Some("sub/dir/file.md".to_string())
+        );
+    }
 }

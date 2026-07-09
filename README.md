@@ -177,6 +177,8 @@ endpoint = "https://my-minio.example.com"  # omit for AWS
 
 Credentials from environment (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) or config (`access_key`/`secret_key`).
 
+> **Note:** S3 has no native locking. If multiple machines sync concurrently, writes can conflict. Use git or folder backends for multi-machine setups, or coordinate S3 access externally.
+
 ## Configuration
 
 Config lives at `~/.config/clync/config.toml`:

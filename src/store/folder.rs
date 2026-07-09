@@ -157,4 +157,52 @@ mod tests {
         assert_eq!(store.file_size("test.txt").unwrap(), 5);
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn lock_creates_lock_file() {
+        let dir = temp_dir("lock_creates");
+        let store = FolderStore::init(&dir.join("store")).unwrap();
+        let _lock = store.lock().unwrap();
+        assert!(dir.join("store").join(".clync.lock").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn try_lock_fails_when_already_locked() {
+        let dir = temp_dir("try_lock_fail");
+        let store = FolderStore::init(&dir.join("store")).unwrap();
+        let _lock = store.lock().unwrap();
+        let result = store.try_lock();
+        assert!(result.is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn try_lock_succeeds_when_unlocked() {
+        let dir = temp_dir("try_lock_ok");
+        let store = FolderStore::init(&dir.join("store")).unwrap();
+        let _lock = store.try_lock().unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lock_released_after_drop() {
+        let dir = temp_dir("lock_drop");
+        let store = FolderStore::init(&dir.join("store")).unwrap();
+        {
+            let _lock = store.lock().unwrap();
+        }
+        // After drop, try_lock should succeed
+        let _lock = store.try_lock().unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn local_path_returns_root() {
+        let dir = temp_dir("local_path");
+        let store_path = dir.join("store");
+        let store = FolderStore::init(&store_path).unwrap();
+        assert_eq!(store.local_path(), Some(store_path.as_path()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
