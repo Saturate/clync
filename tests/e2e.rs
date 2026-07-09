@@ -86,12 +86,19 @@ impl Machine {
     }
 
     fn init(&self) {
-        self.run_ok(&[
-            "init",
-            "--no-encrypt",
-            "--repo",
-            self.sync_repo.to_str().unwrap(),
-        ]);
+        self.init_impl(true);
+    }
+
+    fn init_encrypted(&self) {
+        self.init_impl(false);
+    }
+
+    fn init_impl(&self, no_encrypt: bool) {
+        let mut args = vec!["init", "--repo", self.sync_repo.to_str().unwrap()];
+        if no_encrypt {
+            args.push("--no-encrypt");
+        }
+        self.run_ok(&args);
         Command::new("git")
             .args(["remote", "add", "origin"])
             .arg(&self.bare_repo)
@@ -101,14 +108,56 @@ impl Machine {
     }
 
     fn join(&self) {
-        let output = Command::new(clync())
+        self.join_impl(true);
+    }
+
+    fn join_encrypted(&self) {
+        // Read the key from this machine's config to pipe it as stdin
+        let key_path = self.config.join("clync").join("key.txt");
+        let key = std::fs::read_to_string(&key_path)
+            .expect("key file must exist before join_encrypted");
+        // Pipe: key for prompt, then "y" for "pull sessions now?"
+        let stdin_data = format!("{}\ny\n", key.trim());
+        let mut child = Command::new(clync())
             .args([
                 "join",
                 self.bare_repo.to_str().unwrap(),
-                "--no-encrypt",
                 "--repo",
                 self.sync_repo.to_str().unwrap(),
             ])
+            .env("HOME", &self.home)
+            .env("XDG_CONFIG_HOME", &self.config)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        {
+            use std::io::Write;
+            child.stdin.take().unwrap().write_all(stdin_data.as_bytes()).unwrap();
+        }
+        let output = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "{}: join_encrypted failed.\nstdout: {stdout}\nstderr: {stderr}",
+            self.name
+        );
+    }
+
+    fn join_impl(&self, no_encrypt: bool) {
+        let mut args = vec![
+            "join",
+            self.bare_repo.to_str().unwrap(),
+            "--repo",
+            self.sync_repo.to_str().unwrap(),
+        ];
+        if no_encrypt {
+            args.push("--no-encrypt");
+        }
+        let output = Command::new(clync())
+            .args(&args)
             .env("HOME", &self.home)
             .env("XDG_CONFIG_HOME", &self.config)
             .stdin(std::process::Stdio::piped())
@@ -1857,4 +1906,219 @@ fn mv_session_no_match() {
 
     let output = a.run(&["mv", "nonexistent-uuid", "/tmp/whatever"]);
     assert!(!output.status.success(), "should fail for nonexistent UUID");
+}
+
+#[test]
+fn encrypted_push_pull_roundtrip() {
+    let env = TestEnv::new("encrypted_roundtrip");
+    let a = env.machine("a");
+    a.init_encrypted();
+
+    a.write_session(
+        "proj",
+        "s1",
+        &[
+            &mode_entry(),
+            &msg("m1", None, 100, "user", "secret message"),
+        ],
+    );
+
+    let out = a.push();
+    assert!(out.contains("1 sessions"), "push: {out}");
+
+    // Verify the stored file is encrypted (not plaintext)
+    let session_file = a.sync_repo.join("sessions").join("s1.jsonl.age");
+    assert!(session_file.exists(), "encrypted session file should exist");
+    let content = std::fs::read(&session_file).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&content).contains("secret message"),
+        "session should be encrypted, not plaintext"
+    );
+
+    let manifest_file = a.sync_repo.join("manifest.json.age");
+    assert!(
+        manifest_file.exists(),
+        "encrypted manifest should exist"
+    );
+
+    let status = a.status();
+    assert!(status.contains("in sync"), "status: {status}");
+}
+
+#[test]
+fn encrypted_join_and_pull() {
+    let env = TestEnv::new("encrypted_join");
+    let a = env.machine("a");
+    a.init_encrypted();
+
+    a.write_session(
+        "proj",
+        "s1",
+        &[
+            &mode_entry(),
+            &msg("m1", None, 100, "user", "encrypted content"),
+        ],
+    );
+    a.push();
+
+    // Copy the key file from machine A to machine B
+    let a_key = a.config.join("clync").join("key.txt");
+    let b = env.machine("b");
+    let b_key_dir = b.config.join("clync");
+    std::fs::create_dir_all(&b_key_dir).unwrap();
+    std::fs::copy(&a_key, b_key_dir.join("key.txt")).unwrap();
+
+    b.join_encrypted();
+    let session = b.find_session_file("s1");
+    assert!(session.is_some(), "session should be pulled");
+    let content = std::fs::read_to_string(session.unwrap()).unwrap();
+    assert!(
+        content.contains("encrypted content"),
+        "pulled session should be decrypted"
+    );
+}
+
+#[test]
+fn encrypted_merge_diverged() {
+    let env = TestEnv::new("encrypted_merge");
+    let a = env.machine("a");
+    a.init_encrypted();
+
+    a.write_session(
+        "proj",
+        "s1",
+        &[
+            &mode_entry(),
+            &msg("m1", None, 100, "user", "initial"),
+        ],
+    );
+    a.push();
+
+    // Copy key and join from B
+    let a_key = a.config.join("clync").join("key.txt");
+    let b = env.machine("b");
+    let b_key_dir = b.config.join("clync");
+    std::fs::create_dir_all(&b_key_dir).unwrap();
+    std::fs::copy(&a_key, b_key_dir.join("key.txt")).unwrap();
+    b.join_encrypted();
+
+    // Machine B adds a message by appending
+    let b_session = b.find_session_file("s1").unwrap();
+    let mut b_content = std::fs::read_to_string(&b_session).unwrap();
+    b_content.push_str(&msg("m3", Some("m1"), 300, "assistant", "from B"));
+    b_content.push('\n');
+    std::fs::write(&b_session, &b_content).unwrap();
+    b.push();
+
+    // Machine A adds a different message by appending
+    let a_session = a.find_session_file("s1").unwrap();
+    let mut a_content = std::fs::read_to_string(&a_session).unwrap();
+    a_content.push_str(&msg("m2", Some("m1"), 200, "assistant", "from A"));
+    a_content.push('\n');
+    std::fs::write(&a_session, &a_content).unwrap();
+
+    // Pull should smart-merge
+    a.pull();
+
+    let content = std::fs::read_to_string(&a_session).unwrap();
+    assert!(has_uuid(&content, "m2"), "should have A's message");
+    assert!(has_uuid(&content, "m3"), "should have B's message");
+}
+
+#[test]
+fn companion_dir_sync() {
+    let env = TestEnv::new("companion_dir");
+    let a = env.machine("a");
+    a.init();
+
+    // Enable companion dir sync
+    a.run_ok(&["config", "set", "sync.include_companion_dirs", "true"]);
+
+    a.write_session(
+        "proj",
+        "s1",
+        &[
+            &mode_entry(),
+            &msg("m1", None, 100, "user", "hello"),
+        ],
+    );
+
+    // Create a companion directory (same name as session UUID, without .jsonl)
+    let companion_dir = a.projects_dir().join("proj").join("s1");
+    std::fs::create_dir_all(&companion_dir).unwrap();
+    std::fs::write(companion_dir.join("artifact.txt"), "companion data").unwrap();
+    std::fs::create_dir_all(companion_dir.join("sub")).unwrap();
+    std::fs::write(companion_dir.join("sub").join("nested.txt"), "nested data").unwrap();
+
+    let out = a.push();
+    assert!(out.contains("1 sessions synced"), "push: {out}");
+
+    // Verify companion tar exists in sync repo
+    let tar_file = a.sync_repo.join("sessions").join("s1.dir.tar.gz");
+    assert!(tar_file.exists(), "companion tar should exist");
+
+    // Pull to machine B - join pulls sessions, then enable companions and pull again
+    let b = env.machine("b");
+    b.join();
+    b.run_ok(&["config", "set", "sync.include_companion_dirs", "true"]);
+
+    // Need another pull to get the companion dir (join doesn't respect the config change)
+    b.pull();
+
+    let session = b.find_session_file("s1");
+    assert!(session.is_some(), "session should be pulled");
+
+    let b_proj_dirs: Vec<_> = std::fs::read_dir(b.projects_dir())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    let b_proj = &b_proj_dirs[0].path();
+    let b_companion = b_proj.join("s1");
+    assert!(b_companion.exists(), "companion dir should be pulled: checked {}", b_companion.display());
+    assert!(
+        b_companion.join("artifact.txt").exists(),
+        "companion file should exist"
+    );
+    let nested = std::fs::read_to_string(b_companion.join("sub").join("nested.txt"));
+    assert_eq!(nested.unwrap(), "nested data", "nested file content");
+}
+
+#[test]
+fn selective_targets_partial() {
+    let env = TestEnv::new("selective_partial");
+    let a = env.machine("a");
+    a.init();
+
+    // Enable settings but disable memories
+    a.run_ok(&["config", "set", "targets.settings", "true"]);
+    a.run_ok(&["config", "set", "targets.memories", "false"]);
+
+    a.write_settings(r#"{"theme":"dark"}"#);
+    a.write_memory("proj", "note.md", "remember this");
+    a.write_session(
+        "proj",
+        "s1",
+        &[
+            &mode_entry(),
+            &msg("m1", None, 100, "user", "hello"),
+        ],
+    );
+
+    a.push();
+
+    let b = env.machine("b");
+    b.join();
+    b.run_ok(&["config", "set", "targets.settings", "true"]);
+    b.run_ok(&["config", "set", "targets.memories", "false"]);
+
+    // Session should be pulled
+    assert!(b.find_session_file("s1").is_some(), "session pulled");
+
+    // Settings should be pulled
+    assert!(b.file_exists("settings.json"), "settings pulled");
+
+    // Memories should NOT be pulled (disabled)
+    let memory_path = b.projects_dir().join("proj").join("memory").join("note.md");
+    assert!(!memory_path.exists(), "memories should not be pulled when disabled");
 }
