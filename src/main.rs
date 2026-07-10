@@ -1,6 +1,7 @@
 mod cmd;
 mod config;
 mod crypto;
+mod convert;
 mod extras;
 pub(crate) mod fileutil;
 pub(crate) mod io;
@@ -192,6 +193,31 @@ enum Cmd {
     },
     /// Run as MCP server (stdio JSON-RPC)
     Mcp,
+    /// Convert sessions between formats (Claude, opencode, pi)
+    Convert {
+        /// Source format: claude, opencode, or pi
+        #[arg(long)]
+        from: String,
+
+        /// Target format: claude, opencode, or pi
+        #[arg(long)]
+        to: String,
+
+        /// Session path or ID to convert
+        session: Option<String>,
+
+        /// Convert all sessions (when source is a directory)
+        #[arg(long)]
+        all: bool,
+
+        /// List available sessions from the source
+        #[arg(long)]
+        list: bool,
+
+        /// Dry run: show what would be converted without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -259,5 +285,13 @@ fn main() -> Result<()> {
         Cmd::Reset { keep_repo, yes } => cmd::init::cmd_reset(keep_repo, yes, &input),
         Cmd::Mv { uuid, target } => cmd::cmd_mv(&uuid, &target),
         Cmd::Mcp => mcp::run_mcp_server(),
+        Cmd::Convert {
+            from,
+            to,
+            session,
+            all,
+            list,
+            dry_run,
+        } => convert::convert_sessions(&from, &to, session.as_deref(), all, list, dry_run),
     }
 }
