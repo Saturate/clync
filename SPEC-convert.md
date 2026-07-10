@@ -6,7 +6,9 @@ Users work across multiple AI coding tools (Claude Code, opencode, pi). Each sto
 
 ## Goal
 
-Add `clync convert` to translate sessions between Claude Code and opencode (bidirectional). The converted sessions should be browsable in the target tool and contain the full conversation with tool call history.
+Add `clync convert` to translate sessions between Claude Code, opencode, and pi (all directions). The converted sessions should be browsable in the target tool and contain the full conversation with tool call history.
+
+Architecture: each format has a reader (into an intermediate representation) and a writer (from IR to target format). Adding a new tool means implementing one reader + one writer, and it automatically converts to/from all other tools.
 
 ## CLI
 
@@ -20,9 +22,21 @@ clync convert --from claude --to opencode --project <dir> # sessions for one pro
 clync convert --from opencode --to claude <session-id>
 clync convert --from opencode --to claude --all
 
+# pi -> Claude Code
+clync convert --from pi --to claude <session-id-or-path>
+clync convert --from pi --to claude --all
+
+# Claude Code -> pi
+clync convert --from claude --to pi <session-uuid-or-path>
+
+# Any direction works
+clync convert --from pi --to opencode --all
+clync convert --from opencode --to pi --all
+
 # List available sessions from a source
 clync convert --from claude --list
 clync convert --from opencode --list
+clync convert --from pi --list
 
 # Dry run (show what would be converted, don't write)
 clync convert --from claude --to opencode --dry-run <session>
@@ -204,6 +218,189 @@ Step markers (wrap each assistant turn):
 
 **opencode tool names:** `bash`, `read`, `write`, `edit`, `grep`, `glob`, `fetch`, `task` (subagent).
 
+### pi sessions
+
+**Location:** `~/.pi/agent/sessions/<encoded-project-dir>/<timestamp>_<uuid>.jsonl`
+
+**Storage:** One JSONL file per session, similar to Claude. Each line is a JSON object. Lines form a chain via `id`/`parentId` fields. Project dirs are double-dash encoded: `--Users-alkj-code-github-clync--`.
+
+**Entry types** (the `type` field):
+
+| Type | Purpose | Convertible |
+|------|---------|-------------|
+| `session` | Session header (version, id, cwd) | Yes (metadata) |
+| `message` | User, assistant, and tool result messages | Yes |
+| `model_change` | Model switch event | No (metadata only) |
+| `thinking_level_change` | Thinking level toggle | No |
+| `compaction` | Context window summarization | No (internal optimization) |
+
+**Session header:**
+```json
+{
+  "type": "session",
+  "version": 3,
+  "id": "019f36bd-cb99-7fa8-aea8-214213eb872c",
+  "timestamp": "2026-07-06T09:23:55.929Z",
+  "cwd": "/Users/alkj/Downloads/web_reactoops"
+}
+```
+
+**User message:**
+```json
+{
+  "type": "message",
+  "id": "df50631a",
+  "parentId": "bb20cd79",
+  "timestamp": "2026-07-06T09:24:06.289Z",
+  "message": {
+    "role": "user",
+    "content": [
+      {"type": "text", "text": "the user's text"}
+    ],
+    "timestamp": 1783329846287
+  }
+}
+```
+
+**Assistant message** (can contain text, toolCall, thinking):
+```json
+{
+  "type": "message",
+  "id": "d9b19377",
+  "parentId": "d84c240d",
+  "timestamp": "2026-07-06T09:24:14.929Z",
+  "message": {
+    "role": "assistant",
+    "content": [
+      {"type": "text", "text": "Let me search for it:"},
+      {"type": "toolCall", "id": "call_m36yrj2r", "name": "bash", "arguments": {"command": "find / -name flag.txt"}}
+    ],
+    "api": "openai-completions",
+    "provider": "ollama",
+    "model": "allangpt:q8",
+    "usage": {"input": 1800, "output": 21, "reasoning": 0, "totalTokens": 1821}
+  }
+}
+```
+
+**Tool result** (separate message, role is `toolResult`):
+```json
+{
+  "type": "message",
+  "id": "d84c240d",
+  "parentId": "3af2dab4",
+  "timestamp": "2026-07-06T09:24:12.722Z",
+  "message": {
+    "role": "toolResult",
+    "toolCallId": "call_phrd9ke2",
+    "toolName": "read",
+    "content": [
+      {"type": "text", "text": "file contents here"}
+    ],
+    "isError": true
+  }
+}
+```
+
+**pi tool names:** `bash`, `read`, `write`, `edit`, `grep`, `glob`, `fetch`, `task`.
+
+**Key differences from Claude:**
+- Threading uses `id`/`parentId` (short hex IDs) instead of `uuid`/`parentUuid` (UUIDv4)
+- Content is always an array (never a plain string)
+- Tool results are separate messages with `role: "toolResult"` (similar to Claude's separate `tool_result` entries)
+- Tool names are lowercase (like opencode, unlike Claude's PascalCase)
+- Has `compaction` entries for context window management (no equivalent in Claude/opencode)
+- Project dir encoding uses double-dashes: `--Users-alkj-code--` vs Claude's single-dash `-Users-alkj-code`
+
+## Intermediate Representation (IR)
+
+All conversions go through a common IR. Adding a new tool means implementing `read(source) -> IR` and `write(IR) -> target`. The IR captures the common denominator across all three formats.
+
+```rust
+struct ConvertedSession {
+    /// Original source identifier (UUID, session ID, or file path)
+    source_id: String,
+    /// Which tool this came from
+    source_tool: SourceTool,  // Claude | Opencode | Pi
+    /// Session title (from ai-title, session.title, or first message)
+    title: String,
+    /// Working directory / project path
+    project_dir: PathBuf,
+    /// Ordered list of conversation messages
+    messages: Vec<ConvertedMessage>,
+    /// Model used (if known)
+    model: Option<String>,
+    /// Provider (if known)
+    provider: Option<String>,
+    /// Aggregate token usage
+    tokens: Option<TokenUsage>,
+}
+
+struct ConvertedMessage {
+    /// Role: User, Assistant, ToolResult
+    role: MessageRole,
+    /// Timestamp (epoch milliseconds)
+    timestamp_ms: u64,
+    /// Content blocks in order
+    content: Vec<ContentBlock>,
+    /// For tool results: which tool call this responds to
+    tool_call_id: Option<String>,
+    /// For tool results: tool name
+    tool_name: Option<String>,
+    /// For tool results: whether it errored
+    is_error: bool,
+}
+
+enum MessageRole {
+    User,
+    Assistant,
+    ToolResult,
+}
+
+enum ContentBlock {
+    Text { text: String },
+    ToolCall {
+        id: String,
+        name: String,          // normalized: lowercase
+        input: serde_json::Value,
+    },
+    ToolResult {
+        call_id: String,
+        output: String,
+        is_error: bool,
+    },
+    // Thinking is intentionally omitted from the IR;
+    // it's Claude-specific and not displayable in other tools
+}
+
+struct TokenUsage {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+    reasoning: u64,
+}
+
+enum SourceTool {
+    Claude,
+    Opencode,
+    Pi,
+}
+```
+
+**Tool name normalization:** The IR stores tool names in lowercase. Readers normalize on ingest; writers capitalize per target conventions.
+
+| Canonical (IR) | Claude | opencode | pi |
+|----------------|--------|----------|----|
+| `bash` | `Bash` | `bash` | `bash` |
+| `read` | `Read` | `read` | `read` |
+| `write` | `Write` | `write` | `write` |
+| `edit` | `Edit` | `edit` | `edit` |
+| `grep` | `Grep` | `grep` | `grep` |
+| `webfetch` | `WebFetch` | `fetch` | `fetch` |
+| `agent` | `Agent` | `task` | `task` |
+| Other | Original case | lowercase | lowercase |
+
 ## Conversion Mapping
 
 ### Claude -> opencode
@@ -222,17 +419,7 @@ Step markers (wrap each assistant turn):
 | `uuid`/`parentUuid` tree | `message.data.parentID` | Flatten tree to linear sequence |
 | Metadata entries (mode, system, etc.) | Dropped | |
 
-**Tool name mapping (Claude -> opencode):**
-| Claude | opencode |
-|--------|----------|
-| `Bash` | `bash` |
-| `Read` | `read` |
-| `Write` | `write` |
-| `Edit` | `edit` |
-| `Grep` | `grep` |
-| `WebFetch` | `fetch` |
-| `Agent` | `task` |
-| Other | Keep original name |
+**Tool name mapping:** Handled by the IR normalization table above.
 
 **ID generation:** opencode uses prefixed IDs. Generate them as:
 - Session: `ses_<random-hex>` (use a UUID or timestamp-based scheme)
@@ -255,21 +442,21 @@ Step markers (wrap each assistant turn):
 | `session.tokens_*` | Dropped (Claude doesn't aggregate) | |
 | `message.data.parentID` | `uuid`/`parentUuid` chain | Generate UUIDs for each entry |
 
-**Tool name mapping (opencode -> Claude):**
-| opencode | Claude |
-|----------|--------|
-| `bash` | `Bash` |
-| `read` | `Read` |
-| `write` | `Write` |
-| `edit` | `Edit` |
-| `grep` | `Grep` |
-| `fetch` | `WebFetch` |
-| `task` | `Agent` |
-| Other | Keep original name |
+**Tool name mapping:** Handled by the IR normalization table above.
 
 **UUID generation:** Claude uses UUIDv4 for `uuid` fields. Generate fresh ones, maintaining the parent chain.
 
 **Project dir encoding:** Convert the opencode `session.directory` path to Claude's encoded format: `/Users/alkj/code/github/clync` -> `-Users-alkj-code-github-clync` (replace `/` with `-`).
+
+### pi conversions
+
+Since pi and Claude are both JSONL with similar structure, pi conversions are the simplest.
+
+**pi -> IR:** Parse JSONL. `session` entry -> session metadata. `message` entries -> IR messages based on `message.role` (user, assistant, toolResult). Content is always an array. `model_change`, `thinking_level_change`, `compaction` entries are dropped.
+
+**IR -> pi:** Write JSONL. Session header first, then messages in order. Generate short hex IDs for `id`/`parentId` chain. Content always as arrays. Tool results as separate `role: "toolResult"` messages.
+
+**pi project dir encoding:** Double-dash wrapped: `--Users-alkj-code-github-clync--`. Decode: strip leading/trailing `--`, replace `-` with `/`, prepend `/`.
 
 **Required metadata entries:** Add these to the start of the JSONL to make Claude recognize the session:
 1. `{"type": "mode", "mode": "normal", "sessionId": "<uuid>"}`
@@ -283,10 +470,11 @@ Step markers (wrap each assistant turn):
 - SHA1 for project ID: use `sha1` or derive from the `age` crate's deps
 
 ### File structure
-- `src/convert/mod.rs` - public API, CLI dispatch
-- `src/convert/claude.rs` - Claude session reader/writer
-- `src/convert/opencode.rs` - opencode session reader/writer
-- `src/convert/mapping.rs` - tool name mapping, ID generation, format translation
+- `src/convert/mod.rs` - public API, CLI dispatch, IR types (`ConvertedSession`, `ConvertedMessage`, etc.)
+- `src/convert/claude.rs` - Claude session reader/writer (JSONL <-> IR)
+- `src/convert/opencode.rs` - opencode session reader/writer (SQLite <-> IR)
+- `src/convert/pi.rs` - pi session reader/writer (JSONL <-> IR)
+- `src/convert/tools.rs` - tool name normalization and mapping between formats
 
 ### Provenance tracking
 
@@ -353,6 +541,19 @@ Converted sessions include a provenance marker for debugging and to prevent doub
 | Git snapshots in steps | Claude doesn't snapshot |
 | Workspace/agent metadata | Claude uses different agent model |
 
+| Lost in pi -> Claude/opencode | Reason |
+|---|---|
+| Compaction summaries | Internal context optimization, not conversation content |
+| Model change events | Metadata, not conversation |
+| Thinking level changes | pi-specific setting |
+| API/provider metadata per message | Not standardized across tools |
+
+| Lost in Claude/opencode -> pi | Reason |
+|---|---|
+| All Claude metadata (hooks, system, permissions) | Claude-specific |
+| opencode step markers and git snapshots | opencode-specific |
+| Extended thinking content | pi supports it but only from its own provider |
+
 ## Clarifications
 
 ### opencode DB path
@@ -395,7 +596,7 @@ If a Claude assistant entry contains only `thinking` content (no `text` or `tool
 Lowercase all tool names when converting Claude -> opencode. opencode uses lowercase (`bash`, `read`, `grep`). MCP tool names like `mcp__chrome-devtools__click` should be lowercased as-is. When converting opencode -> Claude, capitalize the first letter for known tools (`bash` -> `Bash`), pass through unknown names unchanged.
 
 ### Future extensions
-- pi support (JSONL format, similar to Claude but with `id`/`parentId` instead of `uuid`/`parentUuid`)
-- Aider, Cursor, Windsurf session formats
+- Aider, Cursor, Windsurf session formats (add reader/writer per tool, all get every-direction conversion for free)
 - Batch conversion for migration workflows
 - MCP tool for converting sessions on demand
+- `--watch` mode that auto-converts new sessions as they appear
