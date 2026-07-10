@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::Config;
 use crate::crypto::Cipher;
@@ -69,10 +69,7 @@ pub fn cmd_checkout(
         let mut cloned = 0u32;
         let mut failed = 0u32;
         for p in &unmapped {
-            let clone_path = path
-                .as_ref()
-                .map(|b| b.join(repo_name_from_remote(&p.normalized_remote)))
-                .unwrap_or_else(|| p.suggested_clone_path.clone());
+            let clone_path = p.suggested_clone_path.clone();
             match clone_repo(&p.remote_url, &clone_path) {
                 Ok(()) => {
                     println!("  cloned {} to {}", p.remote_url, clone_path.display());
@@ -211,7 +208,7 @@ fn clone_repo(url: &str, target: &Path) -> Result<()> {
         bail!("target directory already exists: {}", target.display());
     }
     let status = std::process::Command::new("git")
-        .args(["clone", url, &target.to_string_lossy()])
+        .args(["clone", "--quiet", url, &target.to_string_lossy()])
         .status()
         .context("git clone failed")?;
     if !status.success() {
@@ -239,8 +236,6 @@ fn print_unmapped(projects: &[UnmappedProject]) {
     println!();
     println!("run `clync checkout` to select and clone, or `clync checkout --all` to clone all.");
 }
-
-use std::path::Path;
 
 #[cfg(test)]
 mod tests {

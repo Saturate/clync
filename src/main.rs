@@ -206,7 +206,7 @@ enum Cmd {
         base: Option<PathBuf>,
 
         /// Target clone path (for single-project checkout)
-        #[arg(long, value_name = "DIR")]
+        #[arg(long, value_name = "DIR", conflicts_with = "all")]
         path: Option<PathBuf>,
 
         /// A specific remote URL or project identifier to clone
