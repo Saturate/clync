@@ -212,6 +212,14 @@ pub fn cmd_pull(no_sync: bool, filter: ScanFilter) -> Result<()> {
             result.pulled, result.merged, result.skipped
         );
 
+        if !result.unmapped_with_remote.is_empty() {
+            let n = result.unmapped_with_remote.len();
+            println!(
+                "note: {n} project{} with remote URLs not cloned locally. run `clync checkout` to clone.",
+                if n == 1 { "" } else { "s" }
+            );
+        }
+
         let extras_result = extras::pull_extras(&config, &cipher)?;
         if extras_result.pulled > 0 {
             println!("pull: {} extra files restored", extras_result.pulled);

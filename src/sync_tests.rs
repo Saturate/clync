@@ -20,6 +20,7 @@ fn make_config(encrypted: bool) -> Config {
         sync: SyncConfig {
             claude_dir: std::path::PathBuf::from("/tmp/fake-claude"),
             include_companion_dirs: false,
+            clone_base: None,
             storage: StorageConfig::Git {
                 path: std::path::PathBuf::from("/tmp/fake-store"),
                 auto_push: false,
@@ -155,6 +156,7 @@ fn push_session_writes_to_store() {
             content_hash: 12345,
             has_companion: false,
             last_pushed_by: "test".into(),
+            remote_url: None,
         },
     };
 
@@ -197,6 +199,7 @@ fn push_session_with_companion_dir() {
             content_hash: 99999,
             has_companion: true,
             last_pushed_by: "test".into(),
+            remote_url: None,
         },
     };
 
@@ -243,6 +246,7 @@ fn push_session_encrypted_uses_age_extension() {
             content_hash: 0,
             has_companion: false,
             last_pushed_by: "test".into(),
+            remote_url: None,
         },
     };
 
