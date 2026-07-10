@@ -288,6 +288,28 @@ Step markers (wrap each assistant turn):
 - `src/convert/opencode.rs` - opencode session reader/writer
 - `src/convert/mapping.rs` - tool name mapping, ID generation, format translation
 
+### Provenance tracking
+
+Converted sessions include a provenance marker for debugging and to prevent double-conversion.
+
+**In opencode (Claude -> opencode):** Store in the `session.metadata` JSON column (already exists, nullable text):
+```json
+{
+  "clync_source": "claude",
+  "clync_source_uuid": "81155ba9-0ba0-422f-9ae1-868de49f162d",
+  "clync_converted_at": "2026-07-10T14:30:00Z"
+}
+```
+
+**In Claude JSONL (opencode -> Claude):** Add a custom entry at the start of the file (Claude Code ignores unknown types):
+```json
+{"type": "clync-provenance", "source": "opencode", "sourceId": "ses_0b42fb309ffe1Q1xG9O7qyeDjK", "convertedAt": "2026-07-10T14:30:00Z"}
+```
+
+**Usage:**
+- Before converting, check if the target already has a provenance marker for this source session. If so, skip unless `--force` is passed.
+- The `--list` command should show `[converted]` next to sessions that came from conversion.
+
 ### Error handling
 - Skip entries that can't be parsed (warn, don't fail)
 - If the target session already exists, skip unless `--force` is passed
