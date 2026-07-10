@@ -388,6 +388,20 @@ enum SourceTool {
 }
 ```
 
+**Linearization:** The IR `messages` Vec is a flat chronological list. Claude sessions can have tree structures (branching via `parentUuid`) and sidechains (`isSidechain: true`). When reading Claude sessions into the IR:
+
+1. Filter out entries with `isSidechain: true` (branch experiments, not the main conversation)
+2. Filter out non-conversation entries (mode, system, attachment, bridge-session, permission-mode, last-prompt)
+3. Sort remaining entries by timestamp
+4. The result is a linear sequence of user/assistant/tool-result messages
+
+When writing from the IR to a target format:
+- **opencode:** Each assistant message's `data.parentID` points to the immediately preceding user message's ID (simple linear chain)
+- **pi:** Each entry's `parentId` points to the previous entry's `id` (linear chain)
+- **Claude:** Generate `uuid`/`parentUuid` as a linear chain (each entry points to the previous one)
+
+The tree structure is a Claude internal detail for conversation branching. The IR intentionally does not model it; all targets expect linear conversations.
+
 **Tool name normalization:** The IR stores tool names in lowercase. Readers normalize on ingest; writers capitalize per target conventions.
 
 | Canonical (IR) | Claude | opencode | pi |
