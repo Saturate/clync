@@ -14,7 +14,7 @@ Add `clync convert` to translate sessions between Claude Code and opencode (bidi
 # Claude Code -> opencode
 clync convert --from claude --to opencode <session-uuid-or-path>
 clync convert --from claude --to opencode --all          # convert all sessions
-clync convert --from claude --to opencode --project <dir> # sessions for one project
+clync convert --from claude --to opencode --project <dir> # sessions for one project (real path, not encoded)
 
 # opencode -> Claude Code  
 clync convert --from opencode --to claude <session-id>
@@ -330,6 +330,26 @@ Step markers (wrap each assistant turn):
 | Session-level cost aggregation | Claude doesn't aggregate |
 | Git snapshots in steps | Claude doesn't snapshot |
 | Workspace/agent metadata | Claude uses different agent model |
+
+## Clarifications
+
+### opencode DB path
+`~/.local/share/opencode/opencode.db` is correct on macOS. opencode uses XDG conventions (`$XDG_DATA_HOME/opencode/`), not the macOS `~/Library/Application Support/` pattern. Respect `$XDG_DATA_HOME` if set, fall back to `~/.local/share/opencode/`.
+
+### Tool call without tool_result
+When a Claude `tool_use` has no corresponding `tool_result` (session interrupted mid-execution), create the opencode `part` with `state.status: "pending"` and empty output. Don't skip it; the call itself is useful history.
+
+### Session title fallback
+The `ai-title` entry is not always present in Claude sessions. Fallback chain:
+1. `ai-title` entry if present
+2. First user message content, truncated to 80 chars
+3. `"Untitled session"`
+
+### ID collision avoidance
+When generating opencode IDs (`ses_`, `msg_`, `prt_` prefixed), collision risk is negligible with 128-bit random values. Still, do a `SELECT EXISTS` check before insert. One query is cheap insurance.
+
+### --project flag
+Accepts the real filesystem path (e.g. `~/code/github/clync` or `/Users/alkj/code/github/clync`). The tool resolves it to the Claude-encoded form (`-Users-alkj-code-github-clync`) internally. Users should never need to know about dash-encoding.
 
 ### Future extensions
 - pi support (JSONL format, similar to Claude but with `id`/`parentId` instead of `uuid`/`parentUuid`)
