@@ -15,6 +15,8 @@ pub struct SyncConfig {
     pub claude_dir: PathBuf,
     #[serde(default)]
     pub include_companion_dirs: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clone_base: Option<PathBuf>,
     pub storage: StorageConfig,
 }
 
@@ -191,6 +193,9 @@ impl Config {
             StorageConfig::S3 { .. } => {}
         }
         config.sync.claude_dir = expand_path(&config.sync.claude_dir);
+        if let Some(ref mut base) = config.sync.clone_base {
+            *base = expand_path(base);
+        }
         if let EncryptionConfig::KeyFile { ref mut path } = config.encryption {
             *path = expand_path(path);
         }
@@ -282,6 +287,7 @@ mod tests {
             sync: SyncConfig {
                 claude_dir: PathBuf::from("/home/user/.claude"),
                 include_companion_dirs: false,
+                clone_base: None,
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp/repo"),
                     auto_push: true,
@@ -313,6 +319,7 @@ mod tests {
             sync: SyncConfig {
                 claude_dir: PathBuf::from("/home/user/.claude"),
                 include_companion_dirs: false,
+                clone_base: None,
                 storage: StorageConfig::Folder {
                     path: PathBuf::from("/mnt/nas/clync"),
                 },

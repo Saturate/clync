@@ -1,3 +1,4 @@
+pub mod checkout;
 pub mod init;
 pub mod join;
 pub mod sync_cmd;

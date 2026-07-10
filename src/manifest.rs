@@ -17,6 +17,8 @@ pub struct SessionEntry {
     pub has_companion: bool,
     #[serde(default)]
     pub last_pushed_by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
 }
 
 impl Manifest {

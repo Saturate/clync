@@ -331,6 +331,7 @@ fn init_with_options(
         sync: SyncConfig {
             claude_dir,
             include_companion_dirs: false,
+            clone_base: None,
             storage,
         },
         encryption,

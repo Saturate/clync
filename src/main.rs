@@ -1,3 +1,4 @@
+mod checkout_tui;
 mod cmd;
 mod config;
 mod crypto;
@@ -190,6 +191,27 @@ enum Cmd {
         /// Target project path (e.g. ~/code/my-project)
         target: String,
     },
+    /// Clone unmapped project repos referenced in synced sessions
+    Checkout {
+        /// List unmapped projects without cloning
+        #[arg(long)]
+        list: bool,
+
+        /// Clone all unmapped projects
+        #[arg(long)]
+        all: bool,
+
+        /// Base directory for cloning (overrides config clone_base)
+        #[arg(long, value_name = "DIR")]
+        base: Option<PathBuf>,
+
+        /// Target clone path (for single-project checkout)
+        #[arg(long, value_name = "DIR")]
+        path: Option<PathBuf>,
+
+        /// A specific remote URL or project identifier to clone
+        remote: Option<String>,
+    },
     /// Run as MCP server (stdio JSON-RPC)
     Mcp,
 }
@@ -258,6 +280,13 @@ fn main() -> Result<()> {
         } => cmd::join::cmd_join(url, repo, onepassword, no_encrypt, &input),
         Cmd::Reset { keep_repo, yes } => cmd::init::cmd_reset(keep_repo, yes, &input),
         Cmd::Mv { uuid, target } => cmd::cmd_mv(&uuid, &target),
+        Cmd::Checkout {
+            list,
+            all,
+            base,
+            path,
+            remote,
+        } => cmd::checkout::cmd_checkout(list, all, base, path, remote),
         Cmd::Mcp => mcp::run_mcp_server(),
     }
 }
