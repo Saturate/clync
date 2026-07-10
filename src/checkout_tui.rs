@@ -6,7 +6,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use std::io;
 use std::path::PathBuf;
 
@@ -23,6 +23,7 @@ struct TuiItem {
 struct TuiState {
     items: Vec<TuiItem>,
     cursor: usize,
+    list_state: ListState,
     editing: Option<usize>,
     edit_buffer: String,
     edit_cursor: usize,
@@ -30,7 +31,7 @@ struct TuiState {
 
 impl TuiState {
     fn from_projects(projects: &[UnmappedProject]) -> Self {
-        let items = projects
+        let items: Vec<TuiItem> = projects
             .iter()
             .map(|p| TuiItem {
                 remote_url: p.remote_url.clone(),
@@ -40,9 +41,14 @@ impl TuiState {
                 clone_path: p.suggested_clone_path.to_string_lossy().to_string(),
             })
             .collect();
+        let mut list_state = ListState::default();
+        if !items.is_empty() {
+            list_state.select(Some(0));
+        }
         Self {
             items,
             cursor: 0,
+            list_state,
             editing: None,
             edit_buffer: String::new(),
             edit_cursor: 0,
@@ -126,7 +132,7 @@ fn run_loop(
     state: &mut TuiState,
 ) -> Result<Vec<CloneAction>> {
     loop {
-        terminal.draw(|frame| draw(frame, state))?;
+        terminal.draw(|frame| draw(frame, &mut *state))?;
 
         if let Event::Key(key) = event::read()? {
             if state.editing.is_some() {
@@ -152,6 +158,9 @@ fn run_loop(
                                 next_char_boundary(&state.edit_buffer, state.edit_cursor);
                         }
                     }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Ok(Vec::new());
+                    }
                     KeyCode::Char(c) => {
                         state.edit_buffer.insert(state.edit_cursor, c);
                         state.edit_cursor += c.len_utf8();
@@ -169,11 +178,13 @@ fn run_loop(
                 KeyCode::Up | KeyCode::Char('k') => {
                     if state.cursor > 0 {
                         state.cursor -= 1;
+                        state.list_state.select(Some(state.cursor));
                     }
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     if state.cursor + 1 < state.items.len() {
                         state.cursor += 1;
+                        state.list_state.select(Some(state.cursor));
                     }
                 }
                 KeyCode::Char(' ') => state.toggle_current(),
@@ -199,7 +210,7 @@ fn run_loop(
     }
 }
 
-fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
+fn draw(frame: &mut ratatui::Frame, state: &mut TuiState) {
     let area = frame.area();
 
     let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(area);
@@ -268,12 +279,14 @@ fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .title(" clync checkout ")
-            .borders(Borders::ALL),
-    );
-    frame.render_widget(list, chunks[0]);
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(" clync checkout ")
+                .borders(Borders::ALL),
+        )
+        .highlight_style(Style::default());
+    frame.render_stateful_widget(list, chunks[0], &mut state.list_state);
 
     let help = if state.editing.is_some() {
         " ENTER: save | ESC: cancel "

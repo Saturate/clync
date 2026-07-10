@@ -82,6 +82,9 @@ pub fn cmd_checkout(
             }
         }
         println!("{cloned} cloned, {failed} failed");
+        if failed > 0 {
+            bail!("{failed} clone(s) failed");
+        }
         return Ok(());
     }
 
@@ -97,6 +100,7 @@ pub fn cmd_checkout(
     }
 
     let mut cloned = 0u32;
+    let mut failed = 0u32;
     for action in &actions {
         match clone_repo(&action.remote_url, &action.clone_path) {
             Ok(()) => {
@@ -107,10 +111,16 @@ pub fn cmd_checkout(
                 );
                 cloned += 1;
             }
-            Err(e) => eprintln!("  failed {}: {e}", action.remote_url),
+            Err(e) => {
+                eprintln!("  failed {}: {e}", action.remote_url);
+                failed += 1;
+            }
         }
     }
     println!("{cloned} repos cloned. run `clync pull` to sync sessions.");
+    if failed > 0 {
+        bail!("{failed} clone(s) failed");
+    }
 
     Ok(())
 }
@@ -175,7 +185,11 @@ pub fn find_unmapped_projects(
         });
     }
 
-    unmapped.sort_by(|a, b| a.normalized_remote.cmp(&b.normalized_remote));
+    unmapped.sort_by(|a, b| {
+        a.normalized_remote
+            .cmp(&b.normalized_remote)
+            .then_with(|| b.session_count.cmp(&a.session_count))
+    });
     dedup_by_remote(&mut unmapped);
 
     Ok(unmapped)
@@ -207,12 +221,13 @@ fn clone_repo(url: &str, target: &Path) -> Result<()> {
     if target.exists() {
         bail!("target directory already exists: {}", target.display());
     }
-    let status = std::process::Command::new("git")
+    let output = std::process::Command::new("git")
         .args(["clone", "--quiet", url, &target.to_string_lossy()])
-        .status()
+        .output()
         .context("git clone failed")?;
-    if !status.success() {
-        bail!("git clone failed for {url}");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git clone failed for {url}: {}", stderr.trim());
     }
     Ok(())
 }

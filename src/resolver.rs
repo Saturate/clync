@@ -100,10 +100,21 @@ pub fn git_remote_url(path: &str) -> Option<String> {
         .output()
         .ok()?;
     if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Some(strip_url_credentials(&url))
     } else {
         None
     }
+}
+
+fn strip_url_credentials(url: &str) -> String {
+    if let Some(scheme_end) = url.find("://") {
+        let after_scheme = &url[scheme_end + 3..];
+        if let Some(at_pos) = after_scheme.find('@') {
+            return format!("{}{}", &url[..scheme_end + 3], &after_scheme[at_pos + 1..]);
+        }
+    }
+    url.to_string()
 }
 
 pub fn normalize_remote(url: &str) -> String {
