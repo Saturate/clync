@@ -88,20 +88,37 @@ impl TuiState {
     }
 }
 
+fn prev_char_boundary(s: &str, from: usize) -> usize {
+    let mut pos = from.saturating_sub(1);
+    while pos > 0 && !s.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
+fn next_char_boundary(s: &str, from: usize) -> usize {
+    let mut pos = from + 1;
+    while pos < s.len() && !s.is_char_boundary(pos) {
+        pos += 1;
+    }
+    pos
+}
+
 pub fn run_tui(projects: &[UnmappedProject]) -> Result<Vec<CloneAction>> {
     enable_raw_mode()?;
+    let result = run_tui_inner(projects);
+    let _ = disable_raw_mode();
+    let _ = Terminal::new(CrosstermBackend::new(io::stdout())).and_then(|mut t| t.clear());
+    result
+}
+
+fn run_tui_inner(projects: &[UnmappedProject]) -> Result<Vec<CloneAction>> {
     let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
-
     let mut state = TuiState::from_projects(projects);
-    let result = run_loop(&mut terminal, &mut state);
-
-    disable_raw_mode()?;
-    terminal.clear()?;
-
-    result
+    run_loop(&mut terminal, &mut state)
 }
 
 fn run_loop(
@@ -118,23 +135,26 @@ fn run_loop(
                     KeyCode::Esc => state.cancel_edit(),
                     KeyCode::Backspace => {
                         if state.edit_cursor > 0 {
-                            state.edit_cursor -= 1;
-                            state.edit_buffer.remove(state.edit_cursor);
+                            let prev = prev_char_boundary(&state.edit_buffer, state.edit_cursor);
+                            state.edit_buffer.drain(prev..state.edit_cursor);
+                            state.edit_cursor = prev;
                         }
                     }
                     KeyCode::Left => {
                         if state.edit_cursor > 0 {
-                            state.edit_cursor -= 1;
+                            state.edit_cursor =
+                                prev_char_boundary(&state.edit_buffer, state.edit_cursor);
                         }
                     }
                     KeyCode::Right => {
                         if state.edit_cursor < state.edit_buffer.len() {
-                            state.edit_cursor += 1;
+                            state.edit_cursor =
+                                next_char_boundary(&state.edit_buffer, state.edit_cursor);
                         }
                     }
                     KeyCode::Char(c) => {
                         state.edit_buffer.insert(state.edit_cursor, c);
-                        state.edit_cursor += 1;
+                        state.edit_cursor += c.len_utf8();
                     }
                     _ => {}
                 }
@@ -209,18 +229,13 @@ fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
 
             let path_line = if is_editing {
                 let before = &state.edit_buffer[..state.edit_cursor];
-                let cursor_char = state
-                    .edit_buffer
-                    .chars()
-                    .nth(state.edit_cursor)
+                let rest = &state.edit_buffer[state.edit_cursor..];
+                let mut chars = rest.chars();
+                let cursor_char = chars
+                    .next()
                     .map(|c| c.to_string())
                     .unwrap_or(" ".to_string());
-                let after_pos = state.edit_cursor + cursor_char.len();
-                let after = if after_pos <= state.edit_buffer.len() {
-                    &state.edit_buffer[after_pos..]
-                } else {
-                    ""
-                };
+                let after = chars.as_str();
                 Line::from(vec![
                     Span::raw("    -> "),
                     Span::raw(before.to_string()),
