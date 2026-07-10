@@ -1,9 +1,11 @@
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::manifest::{SessionEntry, get_machine_id, normalize_project_path};
 use crate::parser::file_content_hash;
+use crate::resolver::{decode_project_dir, git_remote_url};
 
 #[allow(dead_code)]
 pub struct LocalSession {
@@ -33,6 +35,8 @@ pub fn scan_sessions(claude_projects_dir: &Path, filter: &ScanFilter) -> Result<
             .unwrap_or(UNIX_EPOCH)
     });
 
+    let mut remote_cache: HashMap<String, Option<String>> = HashMap::new();
+
     for project_entry in std::fs::read_dir(claude_projects_dir)? {
         let project_entry = project_entry?;
         let project_path = project_entry.path();
@@ -41,6 +45,13 @@ pub fn scan_sessions(claude_projects_dir: &Path, filter: &ScanFilter) -> Result<
         }
 
         let project_dir_name = project_entry.file_name().to_string_lossy().to_string();
+        let remote_url = remote_cache
+            .entry(project_dir_name.clone())
+            .or_insert_with(|| {
+                let real_path = decode_project_dir(&project_dir_name);
+                git_remote_url(&real_path)
+            })
+            .clone();
 
         for entry in std::fs::read_dir(&project_path)? {
             let entry = entry?;
@@ -107,6 +118,7 @@ pub fn scan_sessions(claude_projects_dir: &Path, filter: &ScanFilter) -> Result<
                     content_hash,
                     has_companion,
                     last_pushed_by: get_machine_id(),
+                    remote_url: remote_url.clone(),
                 },
             });
         }

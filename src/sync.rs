@@ -163,6 +163,7 @@ pub fn pull(
             merged: 0,
             skipped: 0,
             archived: 0,
+            unmapped_with_remote: Vec::new(),
         });
     }
 
@@ -181,6 +182,7 @@ pub fn pull(
     let mut actions: Vec<PullAction> = Vec::new();
     let mut skipped = 0u32;
     let mut archived = 0u32;
+    let mut unmapped_remotes: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (uuid, remote_entry) in &remote_manifest.sessions {
         if !is_safe_path_component(uuid) || !is_safe_path_component(&remote_entry.project_path) {
@@ -202,6 +204,13 @@ pub fn pull(
                 .unwrap_or_else(|| {
                     crate::manifest::denormalize_project_path(&remote_entry.project_path)
                 });
+
+        let real_project_path = crate::resolver::decode_project_dir(&project_dir_name);
+        if !std::path::Path::new(&real_project_path).exists()
+            && let Some(ref url) = remote_entry.remote_url
+        {
+            unmapped_remotes.insert(url.clone());
+        }
 
         if let Some(local) = local_map.get(uuid) {
             if local.entry.content_hash == remote_entry.content_hash {
@@ -290,6 +299,7 @@ pub fn pull(
         merged: merged.load(Ordering::Relaxed),
         skipped,
         archived,
+        unmapped_with_remote: unmapped_remotes.into_iter().collect(),
     })
 }
 
@@ -426,6 +436,7 @@ pub struct PullResult {
     pub merged: u32,
     pub skipped: u32,
     pub archived: u32,
+    pub unmapped_with_remote: Vec<String>,
 }
 
 pub struct SessionInfo {
