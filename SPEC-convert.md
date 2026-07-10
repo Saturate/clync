@@ -373,6 +373,27 @@ When generating opencode IDs (`ses_`, `msg_`, `prt_` prefixed), collision risk i
 ### --project flag
 Accepts the real filesystem path (e.g. `~/code/github/clync` or `/Users/alkj/code/github/clync`). The tool resolves it to the Claude-encoded form (`-Users-alkj-code-github-clync`) internally. Users should never need to know about dash-encoding.
 
+### session.metadata column
+The `session.metadata` column already exists in the opencode DB (added via ALTER TABLE after initial creation, which is why it appears at the end of the column list). It's a nullable text column. No migration needed; just write JSON to it.
+
+### Timestamps (Claude -> opencode)
+- `session.time_created`: oldest entry timestamp in the JSONL
+- `session.time_updated`: newest entry timestamp in the JSONL
+- `message.time_created` / `time_updated`: use the entry's own timestamp for both
+- Claude timestamps vary: some entries have `message.timestamp` (epoch ms), some have ISO strings in a `timestamp` field. Normalize to epoch milliseconds for opencode.
+
+### Message ordering in opencode
+opencode orders messages by `(session_id, time_created, id)`, confirmed by the index `message_session_time_created_id_idx`. There is no explicit sequence column on `message`. Insert in chronological order.
+
+### Project name
+When creating a `project` row, use the basename of the worktree path as `name` (e.g. `clync` from `/Users/alkj/code/github/clync`). No need to store the Claude-encoded dir name; the worktree path is sufficient to re-derive it.
+
+### Thinking-only assistant entries
+If a Claude assistant entry contains only `thinking` content (no `text` or `tool_use` blocks), skip it entirely. It would produce zero visible parts in opencode and show as an empty turn. If thinking preceded a `tool_use` in the same content array, the tool_use parts carry the message forward.
+
+### MCP and custom tool names
+Lowercase all tool names when converting Claude -> opencode. opencode uses lowercase (`bash`, `read`, `grep`). MCP tool names like `mcp__chrome-devtools__click` should be lowercased as-is. When converting opencode -> Claude, capitalize the first letter for known tools (`bash` -> `Bash`), pass through unknown names unchanged.
+
 ### Future extensions
 - pi support (JSONL format, similar to Claude but with `id`/`parentId` instead of `uuid`/`parentUuid`)
 - Aider, Cursor, Windsurf session formats
