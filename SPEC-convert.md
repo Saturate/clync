@@ -472,9 +472,14 @@ Since pi and Claude are both JSONL with similar structure, pi conversions are th
 
 **pi project dir encoding:** Double-dash wrapped: `--Users-alkj-code-github-clync--`. Decode: strip leading/trailing `--`, replace `-` with `/`, prepend `/`.
 
-**Required metadata entries:** Add these to the start of the JSONL to make Claude recognize the session:
+### Writing to Claude (any source -> Claude)
+
+When writing the IR to a Claude JSONL file, prepend these metadata entries before the conversation messages:
 1. `{"type": "mode", "mode": "normal", "sessionId": "<uuid>"}`
 2. `{"type": "ai-title", "aiTitle": "<session.title>", "sessionId": "<uuid>"}`
+3. `{"type": "clync-provenance", "source": "<source-tool>", "sourceId": "<original-id>", "convertedAt": "<iso-timestamp>"}`
+
+This applies regardless of whether the source is opencode or pi.
 
 ## Implementation Notes
 
