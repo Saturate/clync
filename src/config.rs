@@ -166,11 +166,29 @@ pub enum EncryptionConfig {
 
 impl Config {
     pub fn config_dir() -> Result<PathBuf> {
-        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-            return Ok(PathBuf::from(xdg).join("clync"));
-        }
         let home = home_dir().context("could not determine home directory")?;
-        Ok(home.join(".config").join("clync"))
+        let primary = home.join(".clync");
+
+        if primary.join("config.toml").exists() {
+            return Ok(primary);
+        }
+
+        let xdg_explicit = std::env::var("XDG_CONFIG_HOME").ok().map(PathBuf::from);
+        let legacy = xdg_explicit
+            .as_ref()
+            .map(|xdg| xdg.join("clync"))
+            .unwrap_or_else(|| home.join(".config").join("clync"));
+
+        if legacy.join("config.toml").exists() {
+            return Ok(legacy);
+        }
+
+        // New installs: honor explicit XDG_CONFIG_HOME, otherwise use ~/.clync/
+        if xdg_explicit.is_some() {
+            Ok(legacy)
+        } else {
+            Ok(primary)
+        }
     }
 
     pub fn config_path() -> Result<PathBuf> {
