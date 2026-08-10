@@ -49,6 +49,17 @@ All notable changes to clync will be documented in this file.
 
 - Better error messages on decryption failures
 
+## [0.4.1] - 2026-08-10
+### Added
+
+- **clync**: Checkout command with TUI for discovering and cloning unmapped project repos
+
+### Changed
+
+- **clync**: Internal architectural changes
+- **clync**: Silently skip orphaned manifest entries on pull and report them as "archived" instead of warning
+- **clync**: Default config directory to ~/.clync/ instead of ~/.config/clync/, with fallback to legacy XDG path for existing installs
+
 ## [0.4.0] - 2026-07-08
 ### Added
 
@@ -60,3 +71,5 @@ All notable changes to clync will be documented in this file.
 - **clync**: Internal architectural changes
 
 [0.4.0]: https://github.com/Saturate/clync/compare/v0.3.0...v0.4.0
+
+[0.4.1]: https://github.com/Saturate/clync/compare/v0.4.0...v0.4.1
