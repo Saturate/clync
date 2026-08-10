@@ -122,6 +122,7 @@ pub fn cmd_join(
         sync: SyncConfig {
             claude_dir,
             include_companion_dirs: false,
+            clone_base: None,
             storage: StorageConfig::Git {
                 path: repo.clone(),
                 auto_push: true,

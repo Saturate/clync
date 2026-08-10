@@ -2122,3 +2122,210 @@ fn selective_targets_partial() {
         "memories should not be pulled when disabled"
     );
 }
+
+// -- Checkout tests --
+
+/// Set up a machine with a project that has a remote_url in the manifest.
+/// Returns the project bare repo URL used as the remote.
+///
+/// Strategy: push sessions from a simple project dir, then patch the manifest
+/// in the sync repo to inject the remote_url. This avoids the dash-encoding
+/// roundtrip problem with temp directory paths (which contain dashes that
+/// break `decode_project_dir`).
+fn setup_checkout_scenario(env: &TestEnv, a: &Machine) -> String {
+    // Create a bare repo that represents the "project's upstream"
+    let project_bare = env.dir.join("project_upstream.git");
+    Command::new("git")
+        .args(["init", "--bare", "-b", "main"])
+        .arg(&project_bare)
+        .output()
+        .unwrap();
+
+    // Make a valid repo with a commit so it can be cloned
+    let tmp_clone = env.dir.join("tmp_clone");
+    Command::new("git")
+        .args([
+            "clone",
+            project_bare.to_str().unwrap(),
+            tmp_clone.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    std::fs::write(tmp_clone.join("README.md"), "test project").unwrap();
+    for args in [
+        vec!["config", "user.email", "test@clync"],
+        vec!["config", "user.name", "test"],
+        vec!["add", "-A"],
+        vec!["commit", "-m", "init"],
+        vec!["push", "-u", "origin", "main"],
+    ] {
+        Command::new("git")
+            .args(&args)
+            .current_dir(&tmp_clone)
+            .output()
+            .unwrap();
+    }
+    std::fs::remove_dir_all(&tmp_clone).ok();
+
+    // Write a session under a simple project name, then push
+    a.write_session(
+        "myproject",
+        "s1",
+        &[&mode_entry(), &msg("m1", None, 100, "user", "hello")],
+    );
+    a.push();
+
+    // Patch the manifest in the sync repo to inject remote_url.
+    // The manifest is plaintext (--no-encrypt) JSON at manifest.json.
+    let manifest_path = a.sync_repo.join("manifest.json");
+    let manifest_str = std::fs::read_to_string(&manifest_path).unwrap();
+    let patched = manifest_str.replace(
+        r#""last_pushed_by":"#,
+        &format!(
+            r#""remote_url":"{}","last_pushed_by":"#,
+            project_bare.to_str().unwrap()
+        ),
+    );
+    std::fs::write(&manifest_path, &patched).unwrap();
+
+    // Commit and push the patched manifest
+    for args in [
+        vec!["add", "-A"],
+        vec!["commit", "-m", "patch manifest"],
+        vec!["push"],
+    ] {
+        Command::new("git")
+            .args(&args)
+            .current_dir(&a.sync_repo)
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@clync")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@clync")
+            .output()
+            .unwrap();
+    }
+
+    project_bare.to_str().unwrap().to_string()
+}
+
+#[test]
+fn checkout_list_shows_unmapped() {
+    let env = TestEnv::new("checkout_list");
+    let a = env.machine("a");
+    a.init();
+
+    let project_url = setup_checkout_scenario(&env, &a);
+
+    // Machine B joins - it won't have the project repo cloned
+    let b = env.machine("b");
+    b.join();
+
+    let out = b.run_ok(&["checkout", "--list"]);
+    assert!(
+        out.contains(&project_url),
+        "checkout --list should show the project remote URL.\nOutput: {out}\nExpected to contain: {project_url}"
+    );
+    assert!(
+        out.contains("1 session"),
+        "should show session count: {out}"
+    );
+    assert!(out.contains("unmapped"), "should say unmapped: {out}");
+}
+
+#[test]
+fn checkout_clone_single() {
+    let env = TestEnv::new("checkout_single");
+    let a = env.machine("a");
+    a.init();
+
+    let project_url = setup_checkout_scenario(&env, &a);
+
+    let b = env.machine("b");
+    b.join();
+
+    let clone_target = env.dir.join("b").join("cloned_repo");
+    let out = b.run_ok(&[
+        "checkout",
+        &project_url,
+        "--path",
+        clone_target.to_str().unwrap(),
+    ]);
+    assert!(out.contains("cloned"), "should report cloned: {out}");
+    assert!(clone_target.join(".git").exists(), "repo should be cloned");
+    assert!(
+        clone_target.join("README.md").exists(),
+        "cloned repo should have README"
+    );
+}
+
+#[test]
+fn checkout_all_clones() {
+    let env = TestEnv::new("checkout_all");
+    let a = env.machine("a");
+    a.init();
+
+    let _project_url = setup_checkout_scenario(&env, &a);
+
+    let b = env.machine("b");
+    b.join();
+
+    let base_dir = env.dir.join("b").join("clones");
+    std::fs::create_dir_all(&base_dir).unwrap();
+    let out = b.run_ok(&["checkout", "--all", "--base", base_dir.to_str().unwrap()]);
+    assert!(out.contains("1 cloned"), "should clone 1 repo: {out}");
+
+    // The repo should be cloned under base_dir with the last segment of the bare path
+    // (repo_name_from_remote extracts "project_upstream.git" which normalizes)
+    let entries: Vec<_> = std::fs::read_dir(&base_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(entries.len(), 1, "should have one cloned dir");
+    let cloned = entries[0].path();
+    assert!(
+        cloned.join(".git").exists(),
+        "cloned dir should be a git repo: {}",
+        cloned.display()
+    );
+}
+
+#[test]
+fn pull_shows_checkout_notice() {
+    let env = TestEnv::new("pull_notice");
+    let a = env.machine("a");
+    a.init();
+
+    let _project_url = setup_checkout_scenario(&env, &a);
+
+    let b = env.machine("b");
+    b.join();
+
+    // Pull again to see the notice
+    let out = b.pull();
+    assert!(
+        out.contains("not cloned locally"),
+        "pull should show checkout notice: {out}"
+    );
+    assert!(
+        out.contains("clync checkout"),
+        "notice should suggest clync checkout: {out}"
+    );
+}
+
+#[test]
+fn checkout_no_unmapped() {
+    let env = TestEnv::new("checkout_none");
+    let a = env.machine("a");
+    a.init();
+
+    // Write sessions under a simple project name (no git remote -> no remote_url)
+    a.write_session(
+        "proj",
+        "s1",
+        &[&mode_entry(), &msg("m1", None, 100, "user", "hello")],
+    );
+    a.push();
+
+    let out = a.run_ok(&["checkout", "--list"]);
+    assert!(out.contains("all projects"), "should say all cloned: {out}");
+}
