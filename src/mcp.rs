@@ -402,10 +402,15 @@ fn call_tool(name: &str, args: &Value) -> Result<String> {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(config.sync.storage.auto_push());
             let r = crate::cmd::do_pull(do_sync)?;
-            Ok(format!(
-                "pulled {} new, {} merged, {} unchanged, {} extras, {} memories",
-                r.pulled, r.merged, r.skipped, r.extras, r.memories
-            ))
+            let mut msg = format!(
+                "pulled {} new, {} merged, {} unchanged",
+                r.pulled, r.merged, r.skipped
+            );
+            if r.archived > 0 {
+                msg.push_str(&format!(", {} archived", r.archived));
+            }
+            msg.push_str(&format!(", {} extras, {} memories", r.extras, r.memories));
+            Ok(msg)
         }
         "sync_log" => {
             let config = Config::load()?;
