@@ -25,7 +25,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
       - name: Install changesetter
-        run: cargo install changesetter --version 0.2.0
+        run: cargo install --git https://github.com/Saturate/changesetter --tag v0.2.0
 
       - name: Configure git
         run: |
@@ -59,7 +59,7 @@ jobs:
           echo "version=$version" >> $GITHUB_OUTPUT
 
       - name: Push
-        run: git push origin main
+        run: git push origin main --tags
 
   publish:
     name: Publish to crates.io
