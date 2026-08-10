@@ -338,4 +338,44 @@ mod tests {
     fn git_remote_url_nonexistent_path() {
         assert_eq!(git_remote_url("/nonexistent/path/to/repo"), None);
     }
+
+    #[test]
+    fn strip_credentials_https_with_token() {
+        assert_eq!(
+            strip_url_credentials("https://user:token@github.com/org/repo.git"),
+            "https://github.com/org/repo.git"
+        );
+    }
+
+    #[test]
+    fn strip_credentials_https_user_only() {
+        assert_eq!(
+            strip_url_credentials("https://user@github.com/org/repo.git"),
+            "https://github.com/org/repo.git"
+        );
+    }
+
+    #[test]
+    fn strip_credentials_no_credentials() {
+        assert_eq!(
+            strip_url_credentials("https://github.com/org/repo.git"),
+            "https://github.com/org/repo.git"
+        );
+    }
+
+    #[test]
+    fn strip_credentials_ssh_passthrough() {
+        assert_eq!(
+            strip_url_credentials("git@github.com:org/repo.git"),
+            "git@github.com:org/repo.git"
+        );
+    }
+
+    #[test]
+    fn strip_credentials_empty_user() {
+        assert_eq!(
+            strip_url_credentials("https://@github.com/org/repo.git"),
+            "https://github.com/org/repo.git"
+        );
+    }
 }

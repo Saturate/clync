@@ -112,10 +112,13 @@ fn next_char_boundary(s: &str, from: usize) -> usize {
 
 pub fn run_tui(projects: &[UnmappedProject]) -> Result<Vec<CloneAction>> {
     enable_raw_mode()?;
-    let result = run_tui_inner(projects);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_tui_inner(projects)));
     let _ = disable_raw_mode();
     let _ = Terminal::new(CrosstermBackend::new(io::stdout())).and_then(|mut t| t.clear());
-    result
+    match result {
+        Ok(r) => r,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 fn run_tui_inner(projects: &[UnmappedProject]) -> Result<Vec<CloneAction>> {
@@ -196,13 +199,7 @@ fn run_loop(
                     }
                 }
                 KeyCode::Enter => {
-                    let actions = state.selected_actions();
-                    if actions.is_empty() {
-                        state.toggle_current();
-                        let actions = state.selected_actions();
-                        return Ok(actions);
-                    }
-                    return Ok(actions);
+                    return Ok(state.selected_actions());
                 }
                 _ => {}
             }

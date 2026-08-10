@@ -14,8 +14,6 @@ use crate::store::{Store, create_store};
 pub struct UnmappedProject {
     pub remote_url: String,
     pub normalized_remote: String,
-    #[allow(dead_code)]
-    pub project_path: String,
     pub session_count: usize,
     pub suggested_clone_path: PathBuf,
 }
@@ -179,7 +177,6 @@ pub fn find_unmapped_projects(
         unmapped.push(UnmappedProject {
             remote_url: remote_url.clone(),
             normalized_remote: normalized,
-            project_path: project_path.clone(),
             session_count: *session_count,
             suggested_clone_path: suggested,
         });
@@ -222,7 +219,10 @@ fn clone_repo(url: &str, target: &Path) -> Result<()> {
         bail!("target directory already exists: {}", target.display());
     }
     let output = std::process::Command::new("git")
-        .args(["clone", "--quiet", url, &target.to_string_lossy()])
+        .arg("clone")
+        .arg("--quiet")
+        .arg(url)
+        .arg(target)
         .output()
         .context("git clone failed")?;
     if !output.status.success() {
@@ -281,14 +281,12 @@ mod tests {
             UnmappedProject {
                 remote_url: "git@github.com:user/a.git".into(),
                 normalized_remote: "github.com/user/a".into(),
-                project_path: "path-a".into(),
                 session_count: 1,
                 suggested_clone_path: PathBuf::from("/tmp/a"),
             },
             UnmappedProject {
                 remote_url: "https://github.com/user/a".into(),
                 normalized_remote: "github.com/user/a".into(),
-                project_path: "path-a-alt".into(),
                 session_count: 2,
                 suggested_clone_path: PathBuf::from("/tmp/a2"),
             },
