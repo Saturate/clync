@@ -19,6 +19,7 @@ pub struct PullOutput {
     pub pulled: u32,
     pub merged: u32,
     pub skipped: u32,
+    pub archived: u32,
     pub extras: u32,
     pub memories: u32,
 }
@@ -87,7 +88,7 @@ pub fn do_pull(do_sync: bool) -> Result<PullOutput> {
         store.sync_down()?;
     }
 
-    let (pulled, merged, skipped, extras, mem) = {
+    let (pulled, merged, skipped, archived, extras, mem) = {
         let _lock = store.try_lock()?;
 
         let cipher = Cipher::from_config(&config.encryption)?;
@@ -116,6 +117,7 @@ pub fn do_pull(do_sync: bool) -> Result<PullOutput> {
             result.pulled,
             result.merged,
             result.skipped,
+            result.archived,
             extras_result.pulled,
             mem_result.pulled,
         )
@@ -125,6 +127,7 @@ pub fn do_pull(do_sync: bool) -> Result<PullOutput> {
         pulled,
         merged,
         skipped,
+        archived,
         extras,
         memories: mem,
     })
@@ -207,10 +210,14 @@ pub fn cmd_pull(no_sync: bool, filter: ScanFilter) -> Result<()> {
         auto_migrate_memories(&config, &cipher);
 
         let result = sync::pull(&config, &cipher, &filter, store.as_ref())?;
-        println!(
+        print!(
             "pull: {} new, {} merged, {} unchanged",
             result.pulled, result.merged, result.skipped
         );
+        if result.archived > 0 {
+            print!(", {} archived", result.archived);
+        }
+        println!();
 
         let extras_result = extras::pull_extras(&config, &cipher)?;
         if extras_result.pulled > 0 {

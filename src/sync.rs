@@ -162,6 +162,7 @@ pub fn pull(
             pulled: 0,
             merged: 0,
             skipped: 0,
+            archived: 0,
         });
     }
 
@@ -179,6 +180,7 @@ pub fn pull(
 
     let mut actions: Vec<PullAction> = Vec::new();
     let mut skipped = 0u32;
+    let mut archived = 0u32;
 
     for (uuid, remote_entry) in &remote_manifest.sessions {
         if !is_safe_path_component(uuid) || !is_safe_path_component(&remote_entry.project_path) {
@@ -191,8 +193,7 @@ pub fn pull(
         let rel_path = format!("sessions/{filename}");
 
         if !store.exists(&rel_path) {
-            eprintln!("warning: session {uuid} not found in repo, skipping");
-            skipped += 1;
+            archived += 1;
             continue;
         }
 
@@ -288,6 +289,7 @@ pub fn pull(
         pulled: pulled.load(Ordering::Relaxed),
         merged: merged.load(Ordering::Relaxed),
         skipped,
+        archived,
     })
 }
 
@@ -423,6 +425,7 @@ pub struct PullResult {
     pub pulled: u32,
     pub merged: u32,
     pub skipped: u32,
+    pub archived: u32,
 }
 
 pub struct SessionInfo {
