@@ -5,7 +5,8 @@ use walkdir::WalkDir;
 use crate::config::Config;
 use crate::crypto::Cipher;
 use crate::fileutil::{
-    encrypted_name, is_encrypted, is_safe_path_component, mtime_secs, restore_file, sync_directory,
+    encrypted_name, is_encrypted, is_safe_path_component, is_traversal_safe, mtime_secs,
+    restore_file, sync_directory,
 };
 use crate::manifest::normalize_project_path;
 use crate::resolver::{build_remote_map, resolve_project_dir};
@@ -83,7 +84,9 @@ pub fn pull_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPullRes
             continue;
         }
         let normalized_name = project_entry.file_name().to_string_lossy().to_string();
-        if !is_safe_path_component(&normalized_name) {
+        if !is_traversal_safe(&normalized_name)
+            || (config.sync.strict_path_validation && !is_safe_path_component(&normalized_name))
+        {
             eprintln!("warning: skipping memory dir with unsafe path: {normalized_name}");
             continue;
         }

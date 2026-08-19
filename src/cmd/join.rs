@@ -123,6 +123,7 @@ pub fn cmd_join(
             claude_dir,
             include_companion_dirs: false,
             clone_base: None,
+            strict_path_validation: false,
             storage: StorageConfig::Git {
                 path: repo.clone(),
                 auto_push: true,

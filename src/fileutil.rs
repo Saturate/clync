@@ -17,8 +17,12 @@ pub fn is_encrypted(config: &Config) -> bool {
     !matches!(config.encryption, crate::config::EncryptionConfig::None)
 }
 
+pub fn is_traversal_safe(s: &str) -> bool {
+    !s.contains('/') && !s.contains('\\') && !s.contains('\0') && s != ".."
+}
+
 pub fn is_safe_path_component(s: &str) -> bool {
-    if s.is_empty() || s.contains('/') || s.contains('\\') || s.contains('\0') {
+    if s.is_empty() || !is_traversal_safe(s) {
         return false;
     }
     !s.split('-').any(|seg| seg == "..")
@@ -152,5 +156,22 @@ mod tests {
         assert!(is_safe_path_component("file.json"));
         assert!(is_safe_path_component("a-b-c"));
         assert!(is_safe_path_component(".hidden"));
+    }
+
+    #[test]
+    fn traversal_safe_blocks_slashes_and_null() {
+        assert!(!is_traversal_safe("a/b"));
+        assert!(!is_traversal_safe("a\\b"));
+        assert!(!is_traversal_safe("a\0b"));
+        assert!(!is_traversal_safe(".."));
+    }
+
+    #[test]
+    fn traversal_safe_allows_empty_and_dash_segments() {
+        assert!(is_traversal_safe(""));
+        assert!(is_traversal_safe("foo-.."));
+        assert!(is_traversal_safe("..-bar"));
+        assert!(is_traversal_safe("session-abc123"));
+        assert!(is_traversal_safe("712f0419-ea8f-4ae7-8407-a3242ab69193"));
     }
 }

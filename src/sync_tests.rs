@@ -21,6 +21,7 @@ fn make_config(encrypted: bool) -> Config {
             claude_dir: std::path::PathBuf::from("/tmp/fake-claude"),
             include_companion_dirs: false,
             clone_base: None,
+            strict_path_validation: false,
             storage: StorageConfig::Git {
                 path: std::path::PathBuf::from("/tmp/fake-store"),
                 auto_push: false,

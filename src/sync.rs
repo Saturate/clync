@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::config::Config;
 use crate::crypto::Cipher;
-use crate::fileutil::is_safe_path_component;
+use crate::fileutil::{is_safe_path_component, is_traversal_safe};
 use crate::manifest::Manifest;
 use crate::merge::smart_merge;
 use crate::parser::{entries_to_jsonl, parse_jsonl, parse_jsonl_file};
@@ -184,8 +184,12 @@ pub fn pull(
     let mut archived = 0u32;
     let mut unmapped_remotes: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    let strict = config.sync.strict_path_validation;
     for (uuid, remote_entry) in &remote_manifest.sessions {
-        if !is_safe_path_component(uuid) || !is_safe_path_component(&remote_entry.project_path) {
+        let safe = is_traversal_safe(uuid) && is_traversal_safe(&remote_entry.project_path);
+        let strict_safe =
+            is_safe_path_component(uuid) && is_safe_path_component(&remote_entry.project_path);
+        if !safe || (strict && !strict_safe) {
             eprintln!("warning: skipping session with unsafe path: {uuid}");
             skipped += 1;
             continue;
