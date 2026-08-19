@@ -183,13 +183,17 @@ enum Cmd {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    /// Move a session to a different project directory
+    /// Move sessions to a different project directory
+    ///
+    /// With one arg: moves all sessions for the current directory's project.
+    /// With two args: if source matches a UUID prefix, moves that session;
+    /// otherwise treats source as a project path and moves all its sessions.
     Mv {
-        /// UUID or UUID prefix of the session to move
-        uuid: String,
+        /// Source (UUID prefix or project path), or target if only one arg
+        source_or_target: String,
 
         /// Target project path (e.g. ~/code/my-project)
-        target: String,
+        target: Option<String>,
     },
     /// Clone unmapped project repos referenced in synced sessions
     Checkout {
@@ -279,7 +283,10 @@ fn main() -> Result<()> {
             no_encrypt,
         } => cmd::join::cmd_join(url, repo, onepassword, no_encrypt, &input),
         Cmd::Reset { keep_repo, yes } => cmd::init::cmd_reset(keep_repo, yes, &input),
-        Cmd::Mv { uuid, target } => cmd::cmd_mv(&uuid, &target),
+        Cmd::Mv {
+            source_or_target,
+            target,
+        } => cmd::cmd_mv(&source_or_target, target.as_deref()),
         Cmd::Checkout {
             list,
             all,

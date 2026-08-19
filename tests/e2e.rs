@@ -1914,6 +1914,64 @@ fn mv_session_no_match() {
 }
 
 #[test]
+fn mv_batch_by_project_path() {
+    let env = TestEnv::new("mv_batch");
+    let a = env.machine("a");
+    a.init();
+
+    let source_path = a.home.join("code").join("old-project");
+    let source_encoded = source_path.to_string_lossy().replace('/', "-");
+
+    a.write_session(
+        &source_encoded,
+        "s1",
+        &[&mode_entry(), &msg("m1", None, 100, "user", "first")],
+    );
+    a.write_session(
+        &source_encoded,
+        "s2",
+        &[&mode_entry(), &msg("m2", None, 200, "user", "second")],
+    );
+
+    let target_path = a.home.join("code").join("new-project");
+    let out = a.run_ok(&[
+        "mv",
+        &source_path.to_string_lossy(),
+        &target_path.to_string_lossy(),
+    ]);
+    assert!(out.contains("moved 2/2"), "batch output: {out}");
+
+    assert!(
+        a.find_session_file("s1").is_some(),
+        "s1 should exist in new project"
+    );
+    assert!(
+        a.find_session_file("s2").is_some(),
+        "s2 should exist in new project"
+    );
+
+    let target_encoded = target_path.to_string_lossy().replace('/', "-");
+    let s1_path = a.find_session_file("s1").unwrap();
+    assert!(
+        s1_path.to_string_lossy().contains(&*target_encoded),
+        "s1 should be in target dir"
+    );
+}
+
+#[test]
+fn mv_no_source_project_fails() {
+    let env = TestEnv::new("mv_no_source");
+    let a = env.machine("a");
+    a.init();
+
+    let output = a.run(&["mv", "/some/nonexistent/source", "/tmp/target"]);
+    assert!(
+        !output.status.success(),
+        "should fail when source project has no sessions"
+    );
+}
+
+#[test]
 fn encrypted_push_pull_roundtrip() {
     let env = TestEnv::new("encrypted_roundtrip");
     let a = env.machine("a");
