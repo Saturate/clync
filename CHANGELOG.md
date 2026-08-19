@@ -49,6 +49,11 @@ All notable changes to clync will be documented in this file.
 
 - Better error messages on decryption failures
 
+## [0.4.2] - 2026-08-19
+### Fixed
+
+- **clync**: Sessions with normalized paths that failed strict validation are no longer silently skipped during pull
+
 ## [0.4.1] - 2026-08-10
 ### Added
 
@@ -73,3 +78,5 @@ All notable changes to clync will be documented in this file.
 [0.4.0]: https://github.com/Saturate/clync/compare/v0.3.0...v0.4.0
 
 [0.4.1]: https://github.com/Saturate/clync/compare/v0.4.0...v0.4.1
+
+[0.4.2]: https://github.com/Saturate/clync/compare/v0.4.1...v0.4.2
