@@ -12,6 +12,7 @@ mod mcp;
 mod mcp_help;
 mod memories;
 mod merge;
+pub(crate) mod output;
 mod parser;
 mod repo_meta;
 mod resolver;

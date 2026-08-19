@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::config::{Config, EncryptionConfig};
+use crate::config::Config;
 use crate::crypto::Cipher;
 use crate::scanner::ScanFilter;
 use crate::store::{create_store, create_store_verbose};
@@ -138,6 +138,7 @@ pub fn cmd_push(no_sync: bool, verbose: bool, filter: ScanFilter) -> Result<()> 
     let cipher = Cipher::from_config(&config.encryption)?;
     let store = create_store_verbose(&config, verbose)?;
     let do_sync = config.sync.storage.auto_push() && !no_sync;
+    let out = crate::output::SyncPrinter::new();
 
     {
         let _lock = store.lock()?;
@@ -148,26 +149,17 @@ pub fn cmd_push(no_sync: bool, verbose: bool, filter: ScanFilter) -> Result<()> 
         ensure_repo_readme(&config)?;
         auto_migrate_memories(&config, &cipher);
 
+        out.push_start();
         let result = sync::push(&config, &cipher, &filter, store.as_ref())?;
-        let verb = if matches!(config.encryption, EncryptionConfig::None) {
-            "synced"
-        } else {
-            "encrypted"
-        };
-        println!(
-            "push: {} sessions {verb}, {} unchanged",
-            result.pushed, result.skipped
-        );
-
         let extras_result = extras::push_extras(&config, &cipher)?;
-        if extras_result.pushed > 0 {
-            println!("push: {} extra files synced", extras_result.pushed);
-        }
-
         let mem_result = memories::push_memories(&config, &cipher)?;
-        if mem_result.pushed > 0 {
-            println!("push: {} memory files synced", mem_result.pushed);
-        }
+
+        out.push_result(
+            result.pushed,
+            result.skipped,
+            extras_result.pushed,
+            mem_result.pushed,
+        );
 
         let mut log = synclog::SyncLogEntry::new("push");
         log.sessions_pushed = result.pushed;
@@ -198,6 +190,7 @@ pub fn cmd_pull(no_sync: bool, verbose: bool, filter: ScanFilter) -> Result<()> 
     let config = Config::load()?;
     let store = create_store_verbose(&config, verbose)?;
     let do_sync = config.sync.storage.auto_push() && !no_sync;
+    let out = crate::output::SyncPrinter::new();
 
     if do_sync {
         store.sync_down()?;
@@ -209,32 +202,22 @@ pub fn cmd_pull(no_sync: bool, verbose: bool, filter: ScanFilter) -> Result<()> 
         let cipher = Cipher::from_config(&config.encryption)?;
         auto_migrate_memories(&config, &cipher);
 
+        out.pull_start();
         let result = sync::pull(&config, &cipher, &filter, store.as_ref())?;
-        print!(
-            "pull: {} new, {} merged, {} unchanged",
-            result.pulled, result.merged, result.skipped
+        let extras_result = extras::pull_extras(&config, &cipher)?;
+        let mem_result = memories::pull_memories(&config, &cipher)?;
+
+        out.pull_result(
+            result.pulled,
+            result.merged,
+            result.skipped,
+            result.archived,
+            extras_result.pulled,
+            mem_result.pulled,
         );
-        if result.archived > 0 {
-            print!(", {} archived", result.archived);
-        }
-        println!();
 
         if !result.unmapped_with_remote.is_empty() {
-            let n = result.unmapped_with_remote.len();
-            println!(
-                "note: {n} project{} with remote URLs not cloned locally. run `clync checkout` to clone.",
-                if n == 1 { "" } else { "s" }
-            );
-        }
-
-        let extras_result = extras::pull_extras(&config, &cipher)?;
-        if extras_result.pulled > 0 {
-            println!("pull: {} extra files restored", extras_result.pulled);
-        }
-
-        let mem_result = memories::pull_memories(&config, &cipher)?;
-        if mem_result.pulled > 0 {
-            println!("pull: {} memory files restored", mem_result.pulled);
+            out.checkout_notice(result.unmapped_with_remote.len());
         }
 
         let mut log = synclog::SyncLogEntry::new("pull");
