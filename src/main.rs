@@ -81,6 +81,10 @@ enum Cmd {
         #[arg(long)]
         no_sync: bool,
 
+        /// Show git output and other details
+        #[arg(long, short = 'v')]
+        verbose: bool,
+
         /// Only sync sessions modified within N days
         #[arg(long, value_name = "DAYS")]
         max_age: Option<u64>,
@@ -95,6 +99,10 @@ enum Cmd {
         #[arg(long)]
         no_sync: bool,
 
+        /// Show git output and other details
+        #[arg(long, short = 'v')]
+        verbose: bool,
+
         /// Only sync sessions modified within N days
         #[arg(long, value_name = "DAYS")]
         max_age: Option<u64>,
@@ -108,6 +116,10 @@ enum Cmd {
         /// Skip remote sync operations
         #[arg(long)]
         no_sync: bool,
+
+        /// Show git output and other details
+        #[arg(long, short = 'v')]
+        verbose: bool,
 
         /// Only sync sessions modified within N days
         #[arg(long, value_name = "DAYS")]
@@ -250,22 +262,25 @@ fn main() -> Result<()> {
         } => cmd::init::cmd_init(repo, onepassword, no_encrypt, &storage, &input),
         Cmd::Push {
             no_sync,
+            verbose,
             max_age,
             max_size,
-        } => cmd::sync_cmd::cmd_push(no_sync, cmd::build_filter(max_age, max_size)),
+        } => cmd::sync_cmd::cmd_push(no_sync, verbose, cmd::build_filter(max_age, max_size)),
         Cmd::Pull {
             no_sync,
+            verbose,
             max_age,
             max_size,
-        } => cmd::sync_cmd::cmd_pull(no_sync, cmd::build_filter(max_age, max_size)),
+        } => cmd::sync_cmd::cmd_pull(no_sync, verbose, cmd::build_filter(max_age, max_size)),
         Cmd::Sync {
             no_sync,
+            verbose,
             max_age,
             max_size,
         } => {
             let filter = cmd::build_filter(max_age, max_size);
-            cmd::sync_cmd::cmd_pull(no_sync, filter.clone())?;
-            cmd::sync_cmd::cmd_push(no_sync, filter)
+            cmd::sync_cmd::cmd_pull(no_sync, verbose, filter.clone())?;
+            cmd::sync_cmd::cmd_push(no_sync, verbose, filter)
         }
         Cmd::Status { max_age } => cmd::sync_cmd::cmd_status(cmd::build_filter(max_age, None)),
         Cmd::List {

@@ -18,6 +18,12 @@ pub struct UnmappedProject {
     pub suggested_clone_path: PathBuf,
 }
 
+pub struct UnmappedResult {
+    pub projects: Vec<UnmappedProject>,
+    pub no_remote_projects: usize,
+    pub no_remote_sessions: usize,
+}
+
 pub struct CloneAction {
     pub remote_url: String,
     pub clone_path: PathBuf,
@@ -35,15 +41,50 @@ pub fn cmd_checkout(
     let store = create_store(&config)?;
 
     let base_override = base.or(config.sync.clone_base.clone());
-    let unmapped = find_unmapped_projects(&config, &cipher, store.as_ref(), &base_override)?;
+    let result = find_unmapped_projects(&config, &cipher, store.as_ref(), &base_override)?;
+    let unmapped = result.projects;
 
     if unmapped.is_empty() {
         println!("all projects with remote URLs are cloned locally.");
+        if result.no_remote_projects > 0 {
+            println!(
+                "note: {} project{} ({} session{}) have no git remote and can't be auto-cloned.",
+                result.no_remote_projects,
+                if result.no_remote_projects == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                result.no_remote_sessions,
+                if result.no_remote_sessions == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+            );
+        }
         return Ok(());
     }
 
     if list {
         print_unmapped(&unmapped);
+        if result.no_remote_projects > 0 {
+            println!(
+                "note: {} project{} ({} session{}) have no git remote and can't be auto-cloned.",
+                result.no_remote_projects,
+                if result.no_remote_projects == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                result.no_remote_sessions,
+                if result.no_remote_sessions == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+            );
+        }
         return Ok(());
     }
 
@@ -80,6 +121,23 @@ pub fn cmd_checkout(
             }
         }
         println!("{cloned} cloned, {failed} failed");
+        if result.no_remote_projects > 0 {
+            println!(
+                "note: {} project{} ({} session{}) have no git remote and can't be auto-cloned.",
+                result.no_remote_projects,
+                if result.no_remote_projects == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                result.no_remote_sessions,
+                if result.no_remote_sessions == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+            );
+        }
         if failed > 0 {
             bail!("{failed} clone(s) failed");
         }
@@ -128,7 +186,7 @@ pub fn find_unmapped_projects(
     cipher: &Cipher,
     store: &dyn Store,
     base_override: &Option<PathBuf>,
-) -> Result<Vec<UnmappedProject>> {
+) -> Result<UnmappedResult> {
     let manifest_rel = if matches!(config.encryption, crate::config::EncryptionConfig::None) {
         "manifest.json"
     } else {
@@ -136,7 +194,11 @@ pub fn find_unmapped_projects(
     };
 
     if !store.exists(manifest_rel) {
-        return Ok(Vec::new());
+        return Ok(UnmappedResult {
+            projects: Vec::new(),
+            no_remote_projects: 0,
+            no_remote_sessions: 0,
+        });
     }
 
     let data = store.read_file(manifest_rel)?;
@@ -146,26 +208,36 @@ pub fn find_unmapped_projects(
     let projects_dir = config.claude_projects_dir();
     let remote_map = build_remote_map(&projects_dir);
 
-    let mut project_sessions: HashMap<String, (String, usize)> = HashMap::new();
+    let mut project_sessions: HashMap<String, (Option<String>, usize)> = HashMap::new();
     for entry in manifest.sessions.values() {
-        let remote = match &entry.remote_url {
-            Some(url) => url.clone(),
-            None => continue,
-        };
         project_sessions
             .entry(entry.project_path.clone())
-            .and_modify(|(_, count)| *count += 1)
-            .or_insert((remote, 1));
+            .and_modify(|(existing_url, count)| {
+                *count += 1;
+                if existing_url.is_none() {
+                    *existing_url = entry.remote_url.clone();
+                }
+            })
+            .or_insert((entry.remote_url.clone(), 1));
     }
 
+    let mut no_remote_projects = 0usize;
+    let mut no_remote_sessions = 0usize;
     let mut unmapped = Vec::new();
+
     for (project_path, (remote_url, session_count)) in &project_sessions {
+        let remote_url = match remote_url {
+            Some(url) => url,
+            None => {
+                no_remote_projects += 1;
+                no_remote_sessions += session_count;
+                continue;
+            }
+        };
+
         let resolved = resolve_project_dir(project_path, &remote_map, &projects_dir);
         let dir_name = resolved.unwrap_or_default();
 
-        // Check if the actual project repo exists on disk (not the Claude
-        // projects dir, which exists after pull). The decoded path is the
-        // real filesystem path where the git repo should live.
         let real_path = decode_project_dir(&dir_name);
         if std::path::Path::new(&real_path).exists() {
             continue;
@@ -189,7 +261,11 @@ pub fn find_unmapped_projects(
     });
     dedup_by_remote(&mut unmapped);
 
-    Ok(unmapped)
+    Ok(UnmappedResult {
+        projects: unmapped,
+        no_remote_projects,
+        no_remote_sessions,
+    })
 }
 
 fn dedup_by_remote(projects: &mut Vec<UnmappedProject>) {

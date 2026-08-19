@@ -304,12 +304,7 @@ pub fn cmd_mv(source_or_target: &str, target: Option<&str>) -> Result<()> {
             if !uuid_matches.is_empty() {
                 mv_single_session(&uuid_matches, source_or_target, target, &projects_dir)
             } else {
-                mv_by_project(
-                    &sessions,
-                    source_or_target,
-                    target,
-                    &projects_dir,
-                )
+                mv_by_project(&sessions, source_or_target, target, &projects_dir)
             }
         }
         None => {

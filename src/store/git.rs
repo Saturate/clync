@@ -5,12 +5,21 @@ use super::{LocalFs, Store};
 
 pub struct GitStore {
     fs: LocalFs,
+    verbose: bool,
 }
 
 impl GitStore {
     pub fn new(path: PathBuf) -> Self {
         Self {
             fs: LocalFs::new(path),
+            verbose: false,
+        }
+    }
+
+    pub fn with_verbose(path: PathBuf, verbose: bool) -> Self {
+        Self {
+            fs: LocalFs::new(path),
+            verbose,
         }
     }
 
@@ -22,13 +31,14 @@ impl GitStore {
     pub fn init_repo(repo_path: &Path) -> Result<Self> {
         std::fs::create_dir_all(repo_path)?;
         if !repo_path.join(".git").exists() {
-            let status = std::process::Command::new("git")
+            let output = std::process::Command::new("git")
                 .args(["init", "-b", "main"])
                 .current_dir(repo_path)
-                .status()
+                .output()
                 .context("git init failed")?;
-            if !status.success() {
-                bail!("git init failed");
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                bail!("git init failed: {}", stderr.trim());
             }
             std::fs::write(repo_path.join(".gitignore"), ".clync.lock\n")?;
         }
@@ -36,12 +46,13 @@ impl GitStore {
     }
 
     pub fn clone_repo(url: &str, dest: &Path) -> Result<Self> {
-        let status = std::process::Command::new("git")
-            .args(["clone", url, &dest.to_string_lossy()])
-            .status()
+        let output = std::process::Command::new("git")
+            .args(["clone", "--quiet", url, &dest.to_string_lossy()])
+            .output()
             .context("git clone failed")?;
-        if !status.success() {
-            bail!("git clone failed");
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("git clone failed: {}", stderr.trim());
         }
         Ok(Self::new(dest.to_path_buf()))
     }
@@ -143,13 +154,25 @@ impl GitStore {
     }
 
     fn run_git(&self, args: &[&str]) -> Result<()> {
-        let status = std::process::Command::new("git")
-            .args(args)
-            .current_dir(self.fs.root())
-            .status()
-            .with_context(|| format!("git {} failed", args.join(" ")))?;
-        if !status.success() {
-            bail!("git {} exited with {}", args.join(" "), status);
+        if self.verbose {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(self.fs.root())
+                .status()
+                .with_context(|| format!("git {} failed", args.join(" ")))?;
+            if !status.success() {
+                bail!("git {} exited with {}", args.join(" "), status);
+            }
+        } else {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(self.fs.root())
+                .output()
+                .with_context(|| format!("git {} failed", args.join(" ")))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                bail!("git {} failed: {}", args.join(" "), stderr.trim());
+            }
         }
         Ok(())
     }

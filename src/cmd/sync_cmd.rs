@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::config::{Config, EncryptionConfig};
 use crate::crypto::Cipher;
 use crate::scanner::ScanFilter;
-use crate::store::create_store;
+use crate::store::{create_store, create_store_verbose};
 use crate::{extras, manifest, memories, repo_meta, sync, synclog};
 
 use super::init::ensure_repo_readme;
@@ -133,10 +133,10 @@ pub fn do_pull(do_sync: bool) -> Result<PullOutput> {
     })
 }
 
-pub fn cmd_push(no_sync: bool, filter: ScanFilter) -> Result<()> {
+pub fn cmd_push(no_sync: bool, verbose: bool, filter: ScanFilter) -> Result<()> {
     let config = Config::load()?;
     let cipher = Cipher::from_config(&config.encryption)?;
-    let store = create_store(&config)?;
+    let store = create_store_verbose(&config, verbose)?;
     let do_sync = config.sync.storage.auto_push() && !no_sync;
 
     {
@@ -194,9 +194,9 @@ pub fn cmd_push(no_sync: bool, filter: ScanFilter) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_pull(no_sync: bool, filter: ScanFilter) -> Result<()> {
+pub fn cmd_pull(no_sync: bool, verbose: bool, filter: ScanFilter) -> Result<()> {
     let config = Config::load()?;
-    let store = create_store(&config)?;
+    let store = create_store_verbose(&config, verbose)?;
     let do_sync = config.sync.storage.auto_push() && !no_sync;
 
     if do_sync {

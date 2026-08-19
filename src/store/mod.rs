@@ -122,8 +122,18 @@ impl LocalFs {
 }
 
 pub fn create_store(config: &Config) -> Result<Box<dyn Store>> {
+    create_store_with(config, false)
+}
+
+pub fn create_store_verbose(config: &Config, verbose: bool) -> Result<Box<dyn Store>> {
+    create_store_with(config, verbose)
+}
+
+fn create_store_with(config: &Config, verbose: bool) -> Result<Box<dyn Store>> {
     match &config.sync.storage {
-        StorageConfig::Git { path, .. } => Ok(Box::new(git::GitStore::new(path.clone()))),
+        StorageConfig::Git { path, .. } => {
+            Ok(Box::new(git::GitStore::with_verbose(path.clone(), verbose)))
+        }
         StorageConfig::Folder { path } => Ok(Box::new(folder::FolderStore::new(path.clone()))),
         #[cfg(feature = "s3")]
         StorageConfig::S3 {
