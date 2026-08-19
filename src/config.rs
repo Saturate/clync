@@ -17,6 +17,8 @@ pub struct SyncConfig {
     pub include_companion_dirs: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clone_base: Option<PathBuf>,
+    #[serde(default)]
+    pub strict_path_validation: bool,
     pub storage: StorageConfig,
 }
 
@@ -306,6 +308,7 @@ mod tests {
                 claude_dir: PathBuf::from("/home/user/.claude"),
                 include_companion_dirs: false,
                 clone_base: None,
+                strict_path_validation: false,
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp/repo"),
                     auto_push: true,
@@ -338,6 +341,7 @@ mod tests {
                 claude_dir: PathBuf::from("/home/user/.claude"),
                 include_companion_dirs: false,
                 clone_base: None,
+                strict_path_validation: false,
                 storage: StorageConfig::Folder {
                     path: PathBuf::from("/mnt/nas/clync"),
                 },

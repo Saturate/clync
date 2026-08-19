@@ -160,6 +160,7 @@ mod tests {
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
                 clone_base: None,
+                strict_path_validation: false,
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,
@@ -183,6 +184,7 @@ mod tests {
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
                 clone_base: None,
+                strict_path_validation: false,
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,
@@ -207,6 +209,7 @@ mod tests {
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
                 clone_base: None,
+                strict_path_validation: false,
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,
@@ -230,6 +233,7 @@ mod tests {
                 claude_dir: PathBuf::from("/tmp"),
                 include_companion_dirs: false,
                 clone_base: None,
+                strict_path_validation: false,
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,

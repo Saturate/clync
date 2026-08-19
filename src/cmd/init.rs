@@ -332,6 +332,7 @@ fn init_with_options(
             claude_dir,
             include_companion_dirs: false,
             clone_base: None,
+            strict_path_validation: false,
             storage,
         },
         encryption,
