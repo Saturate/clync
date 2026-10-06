@@ -49,6 +49,21 @@ All notable changes to clync will be documented in this file.
 
 - Better error messages on decryption failures
 
+## [0.4.3] - 2026-10-06
+### Added
+
+- **clync**: Add `--recompress` flag to `push` and `sync` to re-push all sessions through the compression pipeline
+- **clync**: Compress data with zstd before encryption, reducing sync repo size by ~65-70%. Configure with `compression` and `compression_level` in config. Pull auto-detects both formats for backward compatibility.
+- **clync**: Batch move: `clync mv <source-project> <target>` moves all sessions between projects, and `clync mv <target>` moves all sessions for the current directory's project
+
+### Changed
+
+- **clync**: Git output is now suppressed by default during sync; use --verbose/-v to see it
+
+### Fixed
+
+- **clync**: Fix partial batch move silently succeeding, LFS push recovery dropping errors, and CI MinIO image pull failure
+
 ## [0.4.2] - 2026-08-19
 ### Fixed
 
@@ -80,3 +95,5 @@ All notable changes to clync will be documented in this file.
 [0.4.1]: https://github.com/Saturate/clync/compare/v0.4.0...v0.4.1
 
 [0.4.2]: https://github.com/Saturate/clync/compare/v0.4.1...v0.4.2
+
+[0.4.3]: https://github.com/Saturate/clync/compare/v0.4.2...v0.4.3
