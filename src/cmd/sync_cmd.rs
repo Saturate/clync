@@ -39,7 +39,7 @@ pub fn do_push(do_sync: bool) -> Result<PushOutput> {
         auto_migrate_memories(&config, &cipher);
 
         let filter = ScanFilter::default();
-        let result = sync::push(&config, &cipher, &filter, store.as_ref())?;
+        let result = sync::push(&config, &cipher, &filter, store.as_ref(), false)?;
         let extras_result = extras::push_extras(&config, &cipher)?;
         let mem_result = memories::push_memories(&config, &cipher)?;
 
@@ -133,7 +133,7 @@ pub fn do_pull(do_sync: bool) -> Result<PullOutput> {
     })
 }
 
-pub fn cmd_push(no_sync: bool, verbose: bool, filter: ScanFilter) -> Result<()> {
+pub fn cmd_push(no_sync: bool, verbose: bool, recompress: bool, filter: ScanFilter) -> Result<()> {
     let config = Config::load()?;
     let cipher = Cipher::from_config(&config.encryption)?;
     let store = create_store_verbose(&config, verbose)?;
@@ -150,7 +150,7 @@ pub fn cmd_push(no_sync: bool, verbose: bool, filter: ScanFilter) -> Result<()> 
         auto_migrate_memories(&config, &cipher);
 
         out.push_start();
-        let result = sync::push(&config, &cipher, &filter, store.as_ref())?;
+        let result = sync::push(&config, &cipher, &filter, store.as_ref(), recompress)?;
         let extras_result = extras::push_extras(&config, &cipher)?;
         let mem_result = memories::push_memories(&config, &cipher)?;
 

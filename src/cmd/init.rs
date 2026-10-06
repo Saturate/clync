@@ -217,7 +217,7 @@ fn cmd_init_interactive(input: &dyn InputSource) -> Result<()> {
                 repo_meta::RepoMeta::from_config(&config).save(path)?;
             }
 
-            let result = sync::push(&config, &keys, &filter, &git_store)?;
+            let result = sync::push(&config, &keys, &filter, &git_store, false)?;
             let extras = extras::push_extras(&config, &keys)?;
             let mem = memories::push_memories(&config, &keys)?;
             println!(

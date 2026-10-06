@@ -53,6 +53,7 @@ pub fn push(
     cipher: &Cipher,
     filter: &ScanFilter,
     store: &dyn Store,
+    recompress: bool,
 ) -> Result<PushResult> {
     let manifest_rel = manifest_filename(config);
     let mut manifest = if store.exists(&manifest_rel) {
@@ -72,10 +73,11 @@ pub fn push(
     let to_push: Vec<&LocalSession> = local_sessions
         .iter()
         .filter(|s| {
-            manifest
-                .sessions
-                .get(&s.uuid)
-                .is_none_or(|existing| existing.content_hash != s.entry.content_hash)
+            recompress
+                || manifest
+                    .sessions
+                    .get(&s.uuid)
+                    .is_none_or(|existing| existing.content_hash != s.entry.content_hash)
         })
         .collect();
 
