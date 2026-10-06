@@ -129,7 +129,10 @@ impl GitStore {
                 crate::lfs::migrate_lfs_files(self.fs.root())?;
                 match self.try_push() {
                     Ok(()) => Ok(()),
-                    Err(_) => self.run_git(&["push", "--force-with-lease"]),
+                    Err(PushError::LargeFiles) => {
+                        bail!("push still rejected for large files after LFS migration")
+                    }
+                    Err(PushError::Other(e)) => Err(e),
                 }
             }
             Err(PushError::Other(e)) => Err(e),
@@ -137,13 +140,13 @@ impl GitStore {
     }
 
     fn try_push(&self) -> Result<(), PushError> {
-        match self.push_capturing_stderr(&["push"]) {
+        let first_stderr = match self.push_capturing_stderr(&["push"]) {
             Ok(()) => return Ok(()),
             Err((_status, ref stderr)) if crate::lfs::is_large_file_push_error(stderr) => {
                 return Err(PushError::LargeFiles);
             }
-            Err(_) => {}
-        }
+            Err((_status, stderr)) => stderr,
+        };
 
         let branch = std::process::Command::new("git")
             .args(["branch", "--show-current"])
@@ -157,8 +160,10 @@ impl GitStore {
             Err((_status, ref stderr)) if crate::lfs::is_large_file_push_error(stderr) => {
                 Err(PushError::LargeFiles)
             }
-            Err((status, _stderr)) => Err(PushError::Other(anyhow::anyhow!(
-                "git push --set-upstream origin {branch} exited with exit status: {status}"
+            Err((_status, stderr)) => Err(PushError::Other(anyhow::anyhow!(
+                "git push failed:\n{}\n{}",
+                first_stderr.trim(),
+                stderr.trim()
             ))),
         }
     }

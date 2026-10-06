@@ -40,7 +40,7 @@ jobs:
             -p 9123:9000 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
-            quay.io/minio/minio:latest server /data
+            elestio/minio:latest server /data
           for i in $(seq 1 30); do
             curl -sf http://localhost:9123/minio/health/live && break
             sleep 1
