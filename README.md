@@ -22,6 +22,7 @@ Great for backup, and for people using more than one machine.
 | **Encryption** | age-based encryption with key management options |
 | **Smart merge** | UUID tree merge for diverged conversations |
 | **Full sync** | Sessions, memories, settings, commands, skills, CLAUDE.md |
+| **Compression** | zstd compression before encryption (~65-70% smaller) |
 | **Parallel** | rayon-based parallel encrypt/decrypt |
 | **MCP server** | 8 tools for Claude Code integration |
 | **Multi-machine** | `join` command for second machine setup (git) |
@@ -95,6 +96,9 @@ clync sync       # pull + push (auto git by default)
 clync push       # encrypt and push
 clync pull       # pull and smart-merge
 clync status     # see what's different
+
+# after enabling compression on an existing repo
+clync push --recompress   # re-push all sessions compressed
 ```
 
 ## Commands
@@ -139,6 +143,20 @@ Six modes, pick during `clync init`:
 | **None** | No encryption | Use private repo |
 
 The age secret key is never stored in the sync repo. With password managers, the key syncs automatically across machines.
+
+## Compression
+
+All data is compressed with zstd before encryption, reducing sync repo size by 65-70%. Session JSONL files are highly compressible; a 119 MB session compresses to ~41 MB.
+
+Compression is on by default. The pull side auto-detects compressed and uncompressed files, so older clync versions can still read from the same repo.
+
+```toml
+[sync]
+compression = true       # default, set false to disable
+compression_level = 3    # 1 (fastest) to 19 (smallest)
+```
+
+After enabling compression on an existing repo, run `clync push --recompress` to convert all sessions in one pass. Without it, sessions convert one at a time as they change.
 
 ## Storage backends
 
@@ -188,6 +206,8 @@ Config lives at `~/.config/clync/config.toml`:
 ```toml
 [sync]
 claude_dir = "~/.claude"
+compression = true
+compression_level = 3
 
 [sync.storage]
 type = "git"
@@ -234,14 +254,14 @@ README.md               # auto-generated
 manifest.json.age       # encrypted session index (or .json if unencrypted)
 sync.log.jsonl          # plaintext sync history
 sessions/
-  <uuid>.jsonl.age      # encrypted session files
+  <uuid>.jsonl.zst.age  # compressed + encrypted session files
 extras/
-  settings.json.age     # encrypted settings
-  CLAUDE.md.age         # encrypted global instructions
-  commands/             # encrypted custom commands
-  skills/               # encrypted custom skills
+  settings.json.zst.age # compressed + encrypted settings
+  CLAUDE.md.zst.age     # compressed + encrypted global instructions
+  commands/             # compressed + encrypted custom commands
+  skills/               # compressed + encrypted custom skills
 memories/
-  <project>/            # encrypted project memories (normalized paths)
+  <project>/            # compressed + encrypted project memories
 ```
 
 ## Contributing
