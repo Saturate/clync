@@ -207,7 +207,7 @@ global_claude_md = false
         &["push"],
     );
     assert!(
-        push_out.contains("1 sessions"),
+        push_out.contains("1 encrypted"),
         "S3 push output: {push_out}"
     );
 

@@ -385,7 +385,7 @@ fn mv_by_project(
     let target_dir = projects_dir.join(&target_encoded);
 
     let count = matching.len();
-    let mut moved = 0u32;
+    let mut moved = 0usize;
     for session in &matching {
         match move_session(session, &target_dir, &target_encoded, projects_dir) {
             Ok(()) => moved += 1,
@@ -394,6 +394,9 @@ fn mv_by_project(
     }
 
     println!("moved {moved}/{count} sessions to [{target_encoded}]");
+    if moved != count {
+        bail!("{} session move(s) failed", count - moved);
+    }
     Ok(())
 }
 
