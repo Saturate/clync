@@ -94,6 +94,10 @@ enum Cmd {
         /// Skip sessions larger than N bytes
         #[arg(long, value_name = "BYTES")]
         max_size: Option<u64>,
+
+        /// Re-push all sessions through the current compression pipeline
+        #[arg(long)]
+        recompress: bool,
     },
     /// Decrypt and smart-merge remote data into local
     Pull {
@@ -130,6 +134,10 @@ enum Cmd {
         /// Skip sessions larger than N bytes
         #[arg(long, value_name = "BYTES")]
         max_size: Option<u64>,
+
+        /// Re-push all sessions through the current compression pipeline
+        #[arg(long)]
+        recompress: bool,
     },
     /// Show what differs between local and remote
     Status {
@@ -267,7 +275,13 @@ fn main() -> Result<()> {
             verbose,
             max_age,
             max_size,
-        } => cmd::sync_cmd::cmd_push(no_sync, verbose, cmd::build_filter(max_age, max_size)),
+            recompress,
+        } => cmd::sync_cmd::cmd_push(
+            no_sync,
+            verbose,
+            recompress,
+            cmd::build_filter(max_age, max_size),
+        ),
         Cmd::Pull {
             no_sync,
             verbose,
@@ -279,10 +293,11 @@ fn main() -> Result<()> {
             verbose,
             max_age,
             max_size,
+            recompress,
         } => {
             let filter = cmd::build_filter(max_age, max_size);
             cmd::sync_cmd::cmd_pull(no_sync, verbose, filter.clone())?;
-            cmd::sync_cmd::cmd_push(no_sync, verbose, filter)
+            cmd::sync_cmd::cmd_push(no_sync, verbose, recompress, filter)
         }
         Cmd::Status { max_age } => cmd::sync_cmd::cmd_status(cmd::build_filter(max_age, None)),
         Cmd::List {
