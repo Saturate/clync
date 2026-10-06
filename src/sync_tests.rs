@@ -175,7 +175,7 @@ fn push_session_writes_to_store() {
     };
 
     let cipher = crate::crypto::Cipher::Plaintext;
-    push_session(&session, &cipher, &store, false, false).unwrap();
+    push_session(&session, &cipher, &store, false, false, 3, false).unwrap();
 
     assert!(store.exists("sessions/abc-123.jsonl"));
     assert_eq!(
@@ -218,7 +218,7 @@ fn push_session_with_companion_dir() {
     };
 
     let cipher = crate::crypto::Cipher::Plaintext;
-    push_session(&session, &cipher, &store, false, true).unwrap();
+    push_session(&session, &cipher, &store, false, false, 3, true).unwrap();
 
     assert!(store.exists("sessions/sess-456.jsonl"));
     assert!(store.exists("sessions/sess-456.dir.tar.gz"));
@@ -265,7 +265,7 @@ fn push_session_encrypted_uses_age_extension() {
     };
 
     let cipher = crate::crypto::Cipher::Plaintext;
-    push_session(&session, &cipher, &store, true, false).unwrap();
+    push_session(&session, &cipher, &store, true, false, 3, false).unwrap();
     assert!(store.exists("sessions/enc-uuid.jsonl.age"));
 
     std::fs::remove_dir_all(&dir).ok();

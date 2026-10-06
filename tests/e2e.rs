@@ -1993,7 +1993,12 @@ fn encrypted_push_pull_roundtrip() {
     assert!(out.contains("1 encrypted"), "push: {out}");
 
     // Verify the stored file is encrypted (not plaintext)
-    let session_file = a.sync_repo.join("sessions").join("s1.jsonl.age");
+    let session_file = a.sync_repo.join("sessions").join("s1.jsonl.zst.age");
+    let session_file = if session_file.exists() {
+        session_file
+    } else {
+        a.sync_repo.join("sessions").join("s1.jsonl.age")
+    };
     assert!(session_file.exists(), "encrypted session file should exist");
     let content = std::fs::read(&session_file).unwrap();
     assert!(

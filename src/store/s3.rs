@@ -131,6 +131,14 @@ impl Store for S3Store {
         self.write_file(rel_path, data)
     }
 
+    fn delete_file(&self, rel_path: &str) -> Result<()> {
+        let key = format!("{}{rel_path}", self.prefix);
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(self.bucket.delete_object(&key))
+            .map_err(|e| anyhow::anyhow!("S3 delete failed: {e}"))?;
+        Ok(())
+    }
+
     fn sync_down(&self) -> Result<()> {
         Ok(())
     }

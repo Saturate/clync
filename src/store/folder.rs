@@ -51,6 +51,10 @@ impl Store for FolderStore {
         self.fs.atomic_write(rel_path, data)
     }
 
+    fn delete_file(&self, rel_path: &str) -> Result<()> {
+        self.fs.delete_file(rel_path)
+    }
+
     fn sync_down(&self) -> Result<()> {
         Ok(())
     }
