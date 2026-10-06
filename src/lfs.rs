@@ -22,6 +22,79 @@ pub fn ensure_lfs_for_file(repo_path: &Path, rel_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Migrate files listed in `.gitattributes` from regular blobs to LFS
+/// pointers across git history. Scopes to unpushed commits when an
+/// upstream tracking ref exists so the push stays a fast-forward.
+pub fn migrate_lfs_files(repo_path: &Path) -> Result<()> {
+    check_lfs_installed()?;
+    install_lfs_local(repo_path)?;
+
+    let attr_path = repo_path.join(".gitattributes");
+    if !attr_path.exists() {
+        bail!("no .gitattributes found; set up LFS tracking first");
+    }
+
+    let content = std::fs::read_to_string(&attr_path)?;
+    let patterns: Vec<&str> = content
+        .lines()
+        .filter_map(|line| {
+            if line.contains("filter=lfs") {
+                line.split_whitespace().next()
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if patterns.is_empty() {
+        bail!("no LFS-tracked patterns in .gitattributes");
+    }
+
+    let include = patterns.join(",");
+    let mut args = vec!["lfs", "migrate", "import", "--include", &include];
+
+    let upstream = upstream_tracking_ref(repo_path);
+    let include_ref;
+    let exclude_ref;
+    if let Some(ref u) = upstream {
+        include_ref = "HEAD".to_string();
+        exclude_ref = u.clone();
+        args.extend(["--include-ref", &include_ref, "--exclude-ref", &exclude_ref]);
+    }
+
+    let output = std::process::Command::new("git")
+        .args(&args)
+        .current_dir(repo_path)
+        .output()
+        .context("git lfs migrate import failed")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git lfs migrate import failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+fn upstream_tracking_ref(repo_path: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "@{upstream}"])
+        .current_dir(repo_path)
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !name.is_empty() {
+            return Some(format!("refs/remotes/{name}"));
+        }
+    }
+    None
+}
+
+pub fn is_large_file_push_error(stderr: &str) -> bool {
+    (stderr.contains("exceeds") && stderr.contains("file size")) || stderr.contains("GH001")
+}
+
 fn check_lfs_installed() -> Result<()> {
     let output = std::process::Command::new("git")
         .args(["lfs", "version"])

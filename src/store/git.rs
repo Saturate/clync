@@ -3,6 +3,11 @@ use std::path::{Path, PathBuf};
 
 use super::{LocalFs, Store};
 
+enum PushError {
+    LargeFiles,
+    Other(anyhow::Error),
+}
+
 pub struct GitStore {
     fs: LocalFs,
     verbose: bool,
@@ -117,17 +122,65 @@ impl GitStore {
         if !self.has_remote() {
             return Ok(());
         }
-        let result = self.run_git(&["push"]);
-        if result.is_err() {
-            let branch = std::process::Command::new("git")
-                .args(["branch", "--show-current"])
-                .current_dir(self.fs.root())
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .unwrap_or_else(|_| "main".into());
-            self.run_git(&["push", "--set-upstream", "origin", &branch])?;
+        match self.try_push() {
+            Ok(()) => Ok(()),
+            Err(PushError::LargeFiles) => {
+                eprintln!("lfs: push rejected due to large files, migrating history...");
+                crate::lfs::migrate_lfs_files(self.fs.root())?;
+                match self.try_push() {
+                    Ok(()) => Ok(()),
+                    Err(_) => self.run_git(&["push", "--force-with-lease"]),
+                }
+            }
+            Err(PushError::Other(e)) => Err(e),
         }
-        Ok(())
+    }
+
+    fn try_push(&self) -> Result<(), PushError> {
+        match self.push_capturing_stderr(&["push"]) {
+            Ok(()) => return Ok(()),
+            Err((_status, ref stderr)) if crate::lfs::is_large_file_push_error(stderr) => {
+                return Err(PushError::LargeFiles);
+            }
+            Err(_) => {}
+        }
+
+        let branch = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(self.fs.root())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "main".into());
+
+        match self.push_capturing_stderr(&["push", "--set-upstream", "origin", &branch]) {
+            Ok(()) => Ok(()),
+            Err((_status, ref stderr)) if crate::lfs::is_large_file_push_error(stderr) => {
+                Err(PushError::LargeFiles)
+            }
+            Err((status, _stderr)) => Err(PushError::Other(anyhow::anyhow!(
+                "git push --set-upstream origin {branch} exited with exit status: {status}"
+            ))),
+        }
+    }
+
+    fn push_capturing_stderr(&self, args: &[&str]) -> Result<(), (String, String)> {
+        let output = match std::process::Command::new("git")
+            .args(args)
+            .current_dir(self.fs.root())
+            .output()
+        {
+            Ok(o) => o,
+            Err(e) => return Err(("failed to execute".into(), e.to_string())),
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if self.verbose && !stderr.is_empty() {
+            eprint!("{stderr}");
+        }
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err((output.status.to_string(), stderr))
+        }
     }
 
     pub fn pull_remote(&self) -> Result<()> {

@@ -361,10 +361,7 @@ fn push_idempotent() {
 
     a.push();
     let out = a.push();
-    assert!(
-        !out.contains("encrypted"),
-        "second push should skip: {out}"
-    );
+    assert!(!out.contains("encrypted"), "second push should skip: {out}");
 }
 
 #[test]
