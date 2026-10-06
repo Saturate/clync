@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::path::Path;
 use walkdir::WalkDir;
 
+use crate::compress;
 use crate::config::Config;
 use crate::crypto::Cipher;
 
@@ -40,7 +41,13 @@ pub fn mtime_secs(path: &Path) -> Result<u64> {
         .unwrap_or(0))
 }
 
-pub fn sync_file_if_changed(src: &Path, dst: &Path, cipher: &Cipher) -> Result<u32> {
+pub fn sync_file_if_changed(
+    src: &Path,
+    dst: &Path,
+    cipher: &Cipher,
+    compressed: bool,
+    compression_level: i32,
+) -> Result<u32> {
     if !src.exists() {
         return Ok(0);
     }
@@ -50,7 +57,17 @@ pub fn sync_file_if_changed(src: &Path, dst: &Path, cipher: &Cipher) -> Result<u
         return Ok(0);
     }
 
-    cipher.encrypt_file(src, dst)?;
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let plaintext = std::fs::read(src)?;
+    let payload = if compressed {
+        compress::compress(&plaintext, compression_level)?
+    } else {
+        plaintext
+    };
+    let encrypted = cipher.encrypt(&payload)?;
+    std::fs::write(dst, encrypted)?;
     Ok(1)
 }
 
@@ -63,13 +80,14 @@ pub fn restore_file(src: &Path, dst: &Path, cipher: &Cipher) -> Result<u32> {
         return Ok(0);
     }
 
-    let plaintext = match cipher.decrypt_file(src) {
+    let decrypted = match cipher.decrypt_file(src) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("warning: could not decrypt {}: {e}", src.display());
             return Ok(0);
         }
     };
+    let plaintext = compress::maybe_decompress(&decrypted)?;
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -82,6 +100,8 @@ pub fn sync_directory(
     dst_dir: &Path,
     cipher: &Cipher,
     encrypted: bool,
+    compressed: bool,
+    compression_level: i32,
 ) -> Result<u32> {
     if !src_dir.exists() {
         return Ok(0);
@@ -93,8 +113,12 @@ pub fn sync_directory(
             continue;
         }
         let rel = entry.path().strip_prefix(src_dir)?;
-        let dst = dst_dir.join(encrypted_name(&rel.to_string_lossy(), encrypted));
-        count += sync_file_if_changed(entry.path(), &dst, cipher)?;
+        let dst = dst_dir.join(storage_name(
+            &rel.to_string_lossy(),
+            encrypted,
+            compressed,
+        ));
+        count += sync_file_if_changed(entry.path(), &dst, cipher, compressed, compression_level)?;
     }
     Ok(count)
 }

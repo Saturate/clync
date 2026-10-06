@@ -8,6 +8,7 @@ use crate::fileutil::{
     encrypted_name, is_encrypted, is_safe_path_component, is_traversal_safe, mtime_secs,
     restore_file, sync_directory,
 };
+use crate::compress;
 use crate::manifest::normalize_project_path;
 use crate::resolver::{build_remote_map, resolve_project_dir};
 
@@ -34,6 +35,8 @@ pub fn push_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPushRes
     };
     let memories_dir = store_path.join("memories");
     let enc = is_encrypted(config);
+    let comp = config.sync.compression;
+    let level = config.sync.compression_level;
 
     let projects_dir = claude_dir.join("projects");
     if !projects_dir.exists() {
@@ -53,7 +56,7 @@ pub fn push_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPushRes
         let raw_name = project_entry.file_name().to_string_lossy().to_string();
         let normalized = normalize_project_path(&raw_name);
         let dst_dir = memories_dir.join(&normalized);
-        pushed += sync_directory(&memory_dir, &dst_dir, cipher, enc)?;
+        pushed += sync_directory(&memory_dir, &dst_dir, cipher, enc, comp, level)?;
     }
 
     Ok(MemoriesPushResult { pushed })
@@ -138,7 +141,10 @@ pub fn migrate_from_extras(config: &Config, cipher: &Cipher) -> Result<(u32, u32
                 .to_string();
 
             let data = std::fs::read(entry.path())?;
-            let plain_name = rel.strip_suffix(".age").unwrap_or(&rel);
+            let plain_name = rel
+                .strip_suffix(".zst.age")
+                .or_else(|| rel.strip_suffix(".age"))
+                .unwrap_or(&rel);
 
             let is_age = rel.ends_with(".age");
             let is_memory_index = plain_name == "MEMORY.md";
@@ -205,7 +211,10 @@ fn restore_memory_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> 
             .strip_prefix(src_dir)?
             .to_string_lossy()
             .to_string();
-        let original_name = rel.strip_suffix(".age").unwrap_or(&rel);
+        let original_name = rel
+            .strip_suffix(".zst.age")
+            .or_else(|| rel.strip_suffix(".age"))
+            .unwrap_or(&rel);
         let dst = dst_dir.join(original_name);
 
         if original_name == "MEMORY.md" && dst.exists() {
@@ -222,13 +231,14 @@ fn merge_memory_index(remote_src: &Path, local_dst: &Path, cipher: &Cipher) -> R
         return Ok(0);
     }
 
-    let remote_plain = match cipher.decrypt_file(remote_src) {
+    let remote_decrypted = match cipher.decrypt_file(remote_src) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("warning: could not decrypt {}: {e}", remote_src.display());
             return Ok(0);
         }
     };
+    let remote_plain = compress::maybe_decompress(&remote_decrypted)?;
     let remote_text = String::from_utf8_lossy(&remote_plain);
     let local_text = std::fs::read_to_string(local_dst)?;
 

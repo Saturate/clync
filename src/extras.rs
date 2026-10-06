@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::config::Config;
 use crate::crypto::Cipher;
 use crate::fileutil::{
-    encrypted_name, is_encrypted, restore_directory, restore_file, sync_directory,
+    is_encrypted, restore_directory, restore_file, storage_name, sync_directory,
     sync_file_if_changed,
 };
 
@@ -27,19 +27,25 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
     let targets = &config.targets;
     let extras_dir = store_path.join("extras");
     let enc = is_encrypted(config);
+    let comp = config.sync.compression;
+    let level = config.sync.compression_level;
 
     let mut pushed = 0u32;
 
     if targets.settings {
         pushed += sync_file_if_changed(
             &claude_dir.join("settings.json"),
-            &extras_dir.join(encrypted_name("settings.json", enc)),
+            &extras_dir.join(storage_name("settings.json", enc, comp)),
             cipher,
+            comp,
+            level,
         )?;
         pushed += sync_file_if_changed(
             &claude_dir.join("settings.local.json"),
-            &extras_dir.join(encrypted_name("settings.local.json", enc)),
+            &extras_dir.join(storage_name("settings.local.json", enc, comp)),
             cipher,
+            comp,
+            level,
         )?;
     }
     if targets.commands {
@@ -48,6 +54,8 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
             &extras_dir.join("commands"),
             cipher,
             enc,
+            comp,
+            level,
         )?;
     }
     if targets.skills {
@@ -56,13 +64,17 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
             &extras_dir.join("skills"),
             cipher,
             enc,
+            comp,
+            level,
         )?;
     }
     if targets.global_claude_md {
         pushed += sync_file_if_changed(
             &claude_dir.join("CLAUDE.md"),
-            &extras_dir.join(encrypted_name("CLAUDE.md", enc)),
+            &extras_dir.join(storage_name("CLAUDE.md", enc, comp)),
             cipher,
+            comp,
+            level,
         )?;
     }
 
@@ -85,14 +97,18 @@ pub fn pull_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPullResult>
 
     let mut pulled = 0u32;
 
+    let find = |name: &str| -> std::path::PathBuf {
+        let compressed = extras_dir.join(storage_name(name, enc, true));
+        if compressed.exists() {
+            return compressed;
+        }
+        extras_dir.join(storage_name(name, enc, false))
+    };
+
     if targets.settings {
+        pulled += restore_file(&find("settings.json"), &claude_dir.join("settings.json"), cipher)?;
         pulled += restore_file(
-            &extras_dir.join(encrypted_name("settings.json", enc)),
-            &claude_dir.join("settings.json"),
-            cipher,
-        )?;
-        pulled += restore_file(
-            &extras_dir.join(encrypted_name("settings.local.json", enc)),
+            &find("settings.local.json"),
             &claude_dir.join("settings.local.json"),
             cipher,
         )?;
@@ -112,11 +128,7 @@ pub fn pull_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPullResult>
         )?;
     }
     if targets.global_claude_md {
-        pulled += restore_file(
-            &extras_dir.join(encrypted_name("CLAUDE.md", enc)),
-            &claude_dir.join("CLAUDE.md"),
-            cipher,
-        )?;
+        pulled += restore_file(&find("CLAUDE.md"), &claude_dir.join("CLAUDE.md"), cipher)?;
     }
 
     Ok(ExtrasPullResult { pulled })
