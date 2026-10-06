@@ -1,5 +1,6 @@
 mod checkout_tui;
 mod cmd;
+mod compress;
 mod config;
 mod crypto;
 mod extras;
