@@ -152,6 +152,15 @@ fn push_session(
 ) -> Result<()> {
     let filename = session_filename(&session.uuid, encrypted, compressed);
     let rel_path = format!("sessions/{filename}");
+
+    if compressed {
+        let old = session_filename_uncompressed(&session.uuid, encrypted);
+        let old_rel = format!("sessions/{old}");
+        if old_rel != rel_path && store.exists(&old_rel) {
+            store.rename_file(&old_rel, &rel_path).ok();
+        }
+    }
+
     let plaintext = std::fs::read(&session.jsonl_path)
         .with_context(|| format!("reading session {}", session.uuid))?;
     let payload = if compressed {
@@ -163,14 +172,6 @@ fn push_session(
         .encrypt(&payload)
         .with_context(|| format!("encrypting session {}", session.uuid))?;
     store.write_file(&rel_path, &data)?;
-
-    if compressed {
-        let old = session_filename_uncompressed(&session.uuid, encrypted);
-        let old_rel = format!("sessions/{old}");
-        if old_rel != rel_path && store.exists(&old_rel) {
-            store.delete_file(&old_rel).ok();
-        }
-    }
 
     if include_companions && let Some(ref companion) = session.companion_dir {
         let tar_data = tar_directory(companion)?;

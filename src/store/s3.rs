@@ -143,6 +143,13 @@ impl Store for S3Store {
         Ok(())
     }
 
+    fn rename_file(&self, from: &str, to: &str) -> Result<()> {
+        let data = self.read_file(from)?;
+        self.write_file(to, &data)?;
+        self.delete_file(from)?;
+        Ok(())
+    }
+
     fn sync_down(&self) -> Result<()> {
         Ok(())
     }

@@ -55,6 +55,10 @@ impl Store for FolderStore {
         self.fs.delete_file(rel_path)
     }
 
+    fn rename_file(&self, from: &str, to: &str) -> Result<()> {
+        self.fs.rename_file(from, to)
+    }
+
     fn sync_down(&self) -> Result<()> {
         Ok(())
     }
