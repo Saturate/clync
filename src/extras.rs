@@ -32,8 +32,9 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
 
     let cleanup_old = |name: &str| {
         if comp {
+            let new = extras_dir.join(storage_name(name, enc, true));
             let old = extras_dir.join(storage_name(name, enc, false));
-            if old.exists() {
+            if new.exists() && old.exists() {
                 std::fs::remove_file(&old).ok();
             }
         }

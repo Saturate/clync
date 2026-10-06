@@ -6,6 +6,13 @@ const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 const MAX_DECOMPRESS_SIZE: u64 = 512 * 1024 * 1024;
 
 pub fn compress(data: &[u8], level: i32) -> Result<Vec<u8>> {
+    if data.len() as u64 > MAX_DECOMPRESS_SIZE {
+        bail!(
+            "input too large to compress ({:.0} MB, limit {} MB)",
+            data.len() as f64 / (1024.0 * 1024.0),
+            MAX_DECOMPRESS_SIZE / (1024 * 1024)
+        );
+    }
     zstd::encode_all(data, level).context("zstd compression failed")
 }
 
