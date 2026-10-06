@@ -141,10 +141,7 @@ pub fn migrate_from_extras(config: &Config, cipher: &Cipher) -> Result<(u32, u32
                 .to_string();
 
             let data = std::fs::read(entry.path())?;
-            let plain_name = rel
-                .strip_suffix(".zst.age")
-                .or_else(|| rel.strip_suffix(".age"))
-                .unwrap_or(&rel);
+            let plain_name = rel.strip_suffix(".age").unwrap_or(&rel);
 
             let is_age = rel.ends_with(".age");
             let is_memory_index = plain_name == "MEMORY.md";

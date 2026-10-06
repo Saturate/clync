@@ -30,6 +30,15 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
     let comp = config.sync.compression;
     let level = config.sync.compression_level;
 
+    let cleanup_old = |name: &str| {
+        if comp {
+            let old = extras_dir.join(storage_name(name, enc, false));
+            if old.exists() {
+                std::fs::remove_file(&old).ok();
+            }
+        }
+    };
+
     let mut pushed = 0u32;
 
     if targets.settings {
@@ -40,6 +49,7 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
             comp,
             level,
         )?;
+        cleanup_old("settings.json");
         pushed += sync_file_if_changed(
             &claude_dir.join("settings.local.json"),
             &extras_dir.join(storage_name("settings.local.json", enc, comp)),
@@ -47,6 +57,7 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
             comp,
             level,
         )?;
+        cleanup_old("settings.local.json");
     }
     if targets.commands {
         pushed += sync_directory(
@@ -76,6 +87,7 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
             comp,
             level,
         )?;
+        cleanup_old("CLAUDE.md");
     }
 
     Ok(ExtrasPushResult { pushed })

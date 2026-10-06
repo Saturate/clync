@@ -220,6 +220,7 @@ impl Config {
             #[cfg(feature = "s3")]
             StorageConfig::S3 { .. } => {}
         }
+        config.sync.compression_level = config.sync.compression_level.clamp(1, 19);
         config.sync.claude_dir = expand_path(&config.sync.claude_dir);
         if let Some(ref mut base) = config.sync.clone_base {
             *base = expand_path(base);
