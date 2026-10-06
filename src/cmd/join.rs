@@ -124,6 +124,8 @@ pub fn cmd_join(
             include_companion_dirs: false,
             clone_base: None,
             strict_path_validation: false,
+            compression: true,
+            compression_level: config::default_compression_level(),
             storage: StorageConfig::Git {
                 path: repo.clone(),
                 auto_push: true,

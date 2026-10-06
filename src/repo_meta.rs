@@ -161,6 +161,8 @@ mod tests {
                 include_companion_dirs: false,
                 clone_base: None,
                 strict_path_validation: false,
+                compression: true,
+                compression_level: crate::config::default_compression_level(),
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,
@@ -185,6 +187,8 @@ mod tests {
                 include_companion_dirs: false,
                 clone_base: None,
                 strict_path_validation: false,
+                compression: true,
+                compression_level: crate::config::default_compression_level(),
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,
@@ -210,6 +214,8 @@ mod tests {
                 include_companion_dirs: false,
                 clone_base: None,
                 strict_path_validation: false,
+                compression: true,
+                compression_level: crate::config::default_compression_level(),
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,
@@ -234,6 +240,8 @@ mod tests {
                 include_companion_dirs: false,
                 clone_base: None,
                 strict_path_validation: false,
+                compression: true,
+                compression_level: crate::config::default_compression_level(),
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,

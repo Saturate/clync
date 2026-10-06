@@ -6,10 +6,14 @@ use crate::config::Config;
 use crate::crypto::Cipher;
 
 pub fn encrypted_name(name: &str, encrypted: bool) -> String {
-    if encrypted {
-        format!("{name}.age")
-    } else {
-        name.to_string()
+    storage_name(name, encrypted, false)
+}
+
+pub fn storage_name(name: &str, encrypted: bool, compressed: bool) -> String {
+    match (encrypted, compressed) {
+        (true, true) => format!("{name}.zst.age"),
+        (true, false) => format!("{name}.age"),
+        _ => name.to_string(),
     }
 }
 
@@ -110,7 +114,10 @@ pub fn restore_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Res
             .strip_prefix(src_dir)?
             .to_string_lossy()
             .to_string();
-        let original_name = rel.strip_suffix(".age").unwrap_or(&rel);
+        let original_name = rel
+            .strip_suffix(".zst.age")
+            .or_else(|| rel.strip_suffix(".age"))
+            .unwrap_or(&rel);
         let dst = dst_dir.join(original_name);
         count += restore_file(entry.path(), &dst, cipher)?;
     }

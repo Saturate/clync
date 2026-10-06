@@ -16,12 +16,16 @@ use crate::resolver::{build_remote_map, resolve_project_dir};
 use crate::scanner::{LocalSession, ScanFilter, scan_sessions};
 use crate::store::Store;
 
-fn session_filename(uuid: &str, encrypted: bool) -> String {
-    if encrypted {
-        format!("{uuid}.jsonl.age")
-    } else {
-        format!("{uuid}.jsonl")
+fn session_filename(uuid: &str, encrypted: bool, compressed: bool) -> String {
+    match (encrypted, compressed) {
+        (true, true) => format!("{uuid}.jsonl.zst.age"),
+        (true, false) => format!("{uuid}.jsonl.age"),
+        _ => format!("{uuid}.jsonl"),
     }
+}
+
+fn session_filename_uncompressed(uuid: &str, encrypted: bool) -> String {
+    session_filename(uuid, encrypted, false)
 }
 
 fn is_encrypted(config: &Config) -> bool {
@@ -84,7 +88,7 @@ pub fn push(
         && let Some(root) = store.local_path()
     {
         for uuid in manifest.sessions.keys() {
-            let filename = session_filename(uuid, encrypted);
+            let filename = session_filename_uncompressed(uuid, encrypted);
             let rel = format!("sessions/{filename}");
             if let Ok(size) = store.file_size(&rel)
                 && size >= lfs_threshold
@@ -117,7 +121,7 @@ fn push_session(
     encrypted: bool,
     include_companions: bool,
 ) -> Result<()> {
-    let filename = session_filename(&session.uuid, encrypted);
+    let filename = session_filename_uncompressed(&session.uuid, encrypted);
     let rel_path = format!("sessions/{filename}");
     let plaintext = std::fs::read(&session.jsonl_path)
         .with_context(|| format!("reading session {}", session.uuid))?;
@@ -195,7 +199,7 @@ pub fn pull(
             continue;
         }
 
-        let filename = session_filename(uuid, encrypted);
+        let filename = session_filename_uncompressed(uuid, encrypted);
         let rel_path = format!("sessions/{filename}");
 
         if !store.exists(&rel_path) {

@@ -151,6 +151,14 @@ pub fn cmd_config(action: Option<super::ConfigAction>) -> Result<()> {
             println!("claude dir:      {}", config.sync.claude_dir.display());
             println!("encryption:      {enc_method}");
             println!("companion dirs:  {}", config.sync.include_companion_dirs);
+            println!(
+                "compression:     {}",
+                if config.sync.compression {
+                    format!("zstd (level {})", config.sync.compression_level)
+                } else {
+                    "disabled".into()
+                }
+            );
             if config.sync.storage.is_git() {
                 let lfs = config.sync.storage.lfs_threshold();
                 let lfs_display = if lfs == 0 {
