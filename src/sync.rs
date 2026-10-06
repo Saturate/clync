@@ -6,6 +6,7 @@ use rayon::prelude::*;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::compress;
 use crate::config::Config;
 use crate::crypto::Cipher;
 use crate::fileutil::{is_safe_path_component, is_traversal_safe};
@@ -16,12 +17,31 @@ use crate::resolver::{build_remote_map, resolve_project_dir};
 use crate::scanner::{LocalSession, ScanFilter, scan_sessions};
 use crate::store::Store;
 
-fn session_filename(uuid: &str, encrypted: bool) -> String {
-    if encrypted {
-        format!("{uuid}.jsonl.age")
-    } else {
-        format!("{uuid}.jsonl")
+fn session_filename(uuid: &str, encrypted: bool, compressed: bool) -> String {
+    match (encrypted, compressed) {
+        (true, true) => format!("{uuid}.jsonl.zst.age"),
+        (true, false) => format!("{uuid}.jsonl.age"),
+        (false, true) => format!("{uuid}.jsonl.zst"),
+        (false, false) => format!("{uuid}.jsonl"),
     }
+}
+
+fn session_filename_uncompressed(uuid: &str, encrypted: bool) -> String {
+    session_filename(uuid, encrypted, false)
+}
+
+fn find_session_file(uuid: &str, encrypted: bool, store: &dyn Store) -> Option<String> {
+    let compressed = session_filename(uuid, encrypted, true);
+    let compressed_rel = format!("sessions/{compressed}");
+    if store.exists(&compressed_rel) {
+        return Some(compressed_rel);
+    }
+    let plain = session_filename_uncompressed(uuid, encrypted);
+    let plain_rel = format!("sessions/{plain}");
+    if store.exists(&plain_rel) {
+        return Some(plain_rel);
+    }
+    None
 }
 
 fn is_encrypted(config: &Config) -> bool {
@@ -45,6 +65,8 @@ pub fn push(
 
     let local_sessions = scan_sessions(&config.claude_projects_dir(), filter)?;
     let encrypted = is_encrypted(config);
+    let compressed = config.sync.compression;
+    let compression_level = config.sync.compression_level;
     let include_companions = config.sync.include_companion_dirs;
 
     let to_push: Vec<&LocalSession> = local_sessions
@@ -62,7 +84,15 @@ pub fn push(
     let results: Vec<_> = to_push
         .par_iter()
         .map(|session| {
-            let result = push_session(session, cipher, store, encrypted, include_companions);
+            let result = push_session(
+                session,
+                cipher,
+                store,
+                encrypted,
+                compressed,
+                compression_level,
+                include_companions,
+            );
             (session.uuid.clone(), session.entry.clone(), result)
         })
         .collect();
@@ -84,9 +114,8 @@ pub fn push(
         && let Some(root) = store.local_path()
     {
         for uuid in manifest.sessions.keys() {
-            let filename = session_filename(uuid, encrypted);
-            let rel = format!("sessions/{filename}");
-            if let Ok(size) = store.file_size(&rel)
+            if let Some(rel) = find_session_file(uuid, encrypted, store)
+                && let Ok(size) = store.file_size(&rel)
                 && size >= lfs_threshold
             {
                 match crate::lfs::ensure_lfs_for_file(root, &rel) {
@@ -115,16 +144,31 @@ fn push_session(
     cipher: &Cipher,
     store: &dyn Store,
     encrypted: bool,
+    compressed: bool,
+    compression_level: i32,
     include_companions: bool,
 ) -> Result<()> {
-    let filename = session_filename(&session.uuid, encrypted);
+    let filename = session_filename(&session.uuid, encrypted, compressed);
     let rel_path = format!("sessions/{filename}");
     let plaintext = std::fs::read(&session.jsonl_path)
         .with_context(|| format!("reading session {}", session.uuid))?;
+    let payload = if compressed {
+        compress::compress(&plaintext, compression_level)?
+    } else {
+        plaintext
+    };
     let data = cipher
-        .encrypt(&plaintext)
+        .encrypt(&payload)
         .with_context(|| format!("encrypting session {}", session.uuid))?;
     store.write_file(&rel_path, &data)?;
+
+    if compressed {
+        let old = session_filename_uncompressed(&session.uuid, encrypted);
+        let old_rel = format!("sessions/{old}");
+        if old_rel != rel_path && store.exists(&old_rel) {
+            store.delete_file(&old_rel).ok();
+        }
+    }
 
     if include_companions && let Some(ref companion) = session.companion_dir {
         let tar_data = tar_directory(companion)?;
@@ -195,13 +239,13 @@ pub fn pull(
             continue;
         }
 
-        let filename = session_filename(uuid, encrypted);
-        let rel_path = format!("sessions/{filename}");
-
-        if !store.exists(&rel_path) {
-            archived += 1;
-            continue;
-        }
+        let rel_path = match find_session_file(uuid, encrypted, store) {
+            Some(p) => p,
+            None => {
+                archived += 1;
+                continue;
+            }
+        };
 
         let project_dir_name =
             resolve_project_dir(&remote_entry.project_path, &remote_map, &projects_dir)
@@ -317,7 +361,8 @@ fn pull_new(
     encrypted: bool,
 ) -> Result<()> {
     let data = store.read_file(rel_path)?;
-    let plaintext = cipher.decrypt(&data)?;
+    let decrypted = cipher.decrypt(&data)?;
+    let plaintext = compress::maybe_decompress(&decrypted)?;
     let target_dir = projects_dir.join(project_dir_name);
     std::fs::create_dir_all(&target_dir)?;
     std::fs::write(target_dir.join(format!("{uuid}.jsonl")), plaintext)?;
@@ -344,7 +389,8 @@ fn pull_merge(
     projects_dir: &Path,
 ) -> Result<()> {
     let remote_data = store.read_file(rel_path)?;
-    let remote_plain = cipher.decrypt(&remote_data)?;
+    let remote_decrypted = cipher.decrypt(&remote_data)?;
+    let remote_plain = compress::maybe_decompress(&remote_decrypted)?;
     let remote_entries = parse_jsonl(&remote_plain)?;
     let local_entries = parse_jsonl_file(local_jsonl_path)?;
 

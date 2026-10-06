@@ -1993,7 +1993,12 @@ fn encrypted_push_pull_roundtrip() {
     assert!(out.contains("1 encrypted"), "push: {out}");
 
     // Verify the stored file is encrypted (not plaintext)
-    let session_file = a.sync_repo.join("sessions").join("s1.jsonl.age");
+    let session_file = a.sync_repo.join("sessions").join("s1.jsonl.zst.age");
+    let session_file = if session_file.exists() {
+        session_file
+    } else {
+        a.sync_repo.join("sessions").join("s1.jsonl.age")
+    };
     assert!(session_file.exists(), "encrypted session file should exist");
     let content = std::fs::read(&session_file).unwrap();
     assert!(
@@ -2389,4 +2394,95 @@ fn checkout_no_unmapped() {
 
     let out = a.run_ok(&["checkout", "--list"]);
     assert!(out.contains("all projects"), "should say all cloned: {out}");
+}
+
+#[test]
+fn compression_roundtrip() {
+    let env = TestEnv::new("compression_roundtrip");
+    let a = env.machine("a");
+    a.init();
+
+    a.write_session(
+        "proj",
+        "s1",
+        &[
+            &mode_entry(),
+            &msg(
+                "m1",
+                None,
+                100,
+                "user",
+                "compressible data repeating repeating repeating",
+            ),
+        ],
+    );
+
+    a.push();
+
+    let compressed_file = a.sync_repo.join("sessions").join("s1.jsonl.zst");
+    let uncompressed_file = a.sync_repo.join("sessions").join("s1.jsonl");
+    assert!(
+        compressed_file.exists(),
+        "should write compressed file, found neither .zst nor plain at sessions/"
+    );
+    assert!(
+        !uncompressed_file.exists(),
+        "old uncompressed file should be cleaned up"
+    );
+
+    let b = env.machine("b");
+    b.join();
+    b.pull();
+
+    let pulled = b.find_session_file("s1");
+    assert!(pulled.is_some(), "session should be pulled");
+    let content = std::fs::read_to_string(pulled.unwrap()).unwrap();
+    assert!(
+        content.contains("compressible data"),
+        "content should roundtrip through compression"
+    );
+}
+
+#[test]
+fn compression_backward_compat_pull() {
+    let env = TestEnv::new("compression_compat");
+    let a = env.machine("a");
+    a.init();
+
+    let config_path = a.config.join("clync").join("config.toml");
+    let config_text = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(
+        &config_path,
+        config_text.replace("compression = true", "compression = false"),
+    )
+    .unwrap();
+
+    a.write_session(
+        "proj",
+        "s1",
+        &[
+            &mode_entry(),
+            &msg("m1", None, 100, "user", "uncompressed data"),
+        ],
+    );
+
+    a.push();
+
+    let uncompressed_file = a.sync_repo.join("sessions").join("s1.jsonl");
+    assert!(
+        uncompressed_file.exists(),
+        "with compression=false, should write plain .jsonl file"
+    );
+
+    let b = env.machine("b");
+    b.join();
+    b.pull();
+
+    let pulled = b.find_session_file("s1");
+    assert!(pulled.is_some(), "should pull uncompressed session");
+    let content = std::fs::read_to_string(pulled.unwrap()).unwrap();
+    assert!(
+        content.contains("uncompressed data"),
+        "content should survive pull without compression"
+    );
 }

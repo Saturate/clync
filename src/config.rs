@@ -19,7 +19,15 @@ pub struct SyncConfig {
     pub clone_base: Option<PathBuf>,
     #[serde(default)]
     pub strict_path_validation: bool,
+    #[serde(default = "default_true")]
+    pub compression: bool,
+    #[serde(default = "default_compression_level")]
+    pub compression_level: i32,
     pub storage: StorageConfig,
+}
+
+pub fn default_compression_level() -> i32 {
+    3
 }
 
 #[derive(Serialize, Deserialize)]
@@ -212,6 +220,7 @@ impl Config {
             #[cfg(feature = "s3")]
             StorageConfig::S3 { .. } => {}
         }
+        config.sync.compression_level = config.sync.compression_level.clamp(1, 19);
         config.sync.claude_dir = expand_path(&config.sync.claude_dir);
         if let Some(ref mut base) = config.sync.clone_base {
             *base = expand_path(base);
@@ -309,6 +318,8 @@ mod tests {
                 include_companion_dirs: false,
                 clone_base: None,
                 strict_path_validation: false,
+                compression: true,
+                compression_level: default_compression_level(),
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp/repo"),
                     auto_push: true,
@@ -342,6 +353,8 @@ mod tests {
                 include_companion_dirs: false,
                 clone_base: None,
                 strict_path_validation: false,
+                compression: true,
+                compression_level: default_compression_level(),
                 storage: StorageConfig::Folder {
                     path: PathBuf::from("/mnt/nas/clync"),
                 },

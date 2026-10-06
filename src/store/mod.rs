@@ -17,6 +17,7 @@ pub trait Store: Send + Sync {
     fn list_files(&self, prefix: &str) -> Result<Vec<String>>;
     fn file_size(&self, rel_path: &str) -> Result<u64>;
     fn atomic_write(&self, rel_path: &str, data: &[u8]) -> Result<()>;
+    fn delete_file(&self, rel_path: &str) -> Result<()>;
 
     fn sync_down(&self) -> Result<()>;
     fn sync_up(&self, message: &str) -> Result<()>;
@@ -91,6 +92,14 @@ impl LocalFs {
         }
         std::fs::write(&tmp_path, data)?;
         std::fs::rename(&tmp_path, &full_path)?;
+        Ok(())
+    }
+
+    pub fn delete_file(&self, rel_path: &str) -> Result<()> {
+        let full_path = self.root.join(rel_path);
+        if full_path.exists() {
+            std::fs::remove_file(&full_path)?;
+        }
         Ok(())
     }
 

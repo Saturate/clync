@@ -22,6 +22,8 @@ fn make_config(encrypted: bool) -> Config {
             include_companion_dirs: false,
             clone_base: None,
             strict_path_validation: false,
+            compression: true,
+            compression_level: crate::config::default_compression_level(),
             storage: StorageConfig::Git {
                 path: std::path::PathBuf::from("/tmp/fake-store"),
                 auto_push: false,
@@ -41,12 +43,23 @@ fn make_config(encrypted: bool) -> Config {
 
 #[test]
 fn session_filename_encrypted() {
-    assert_eq!(session_filename("abc-123", true), "abc-123.jsonl.age");
+    assert_eq!(
+        session_filename("abc-123", true, false),
+        "abc-123.jsonl.age"
+    );
 }
 
 #[test]
 fn session_filename_unencrypted() {
-    assert_eq!(session_filename("abc-123", false), "abc-123.jsonl");
+    assert_eq!(session_filename("abc-123", false, false), "abc-123.jsonl");
+}
+
+#[test]
+fn session_filename_compressed_encrypted() {
+    assert_eq!(
+        session_filename("abc-123", true, true),
+        "abc-123.jsonl.zst.age"
+    );
 }
 
 #[test]
@@ -162,7 +175,7 @@ fn push_session_writes_to_store() {
     };
 
     let cipher = crate::crypto::Cipher::Plaintext;
-    push_session(&session, &cipher, &store, false, false).unwrap();
+    push_session(&session, &cipher, &store, false, false, 3, false).unwrap();
 
     assert!(store.exists("sessions/abc-123.jsonl"));
     assert_eq!(
@@ -205,7 +218,7 @@ fn push_session_with_companion_dir() {
     };
 
     let cipher = crate::crypto::Cipher::Plaintext;
-    push_session(&session, &cipher, &store, false, true).unwrap();
+    push_session(&session, &cipher, &store, false, false, 3, true).unwrap();
 
     assert!(store.exists("sessions/sess-456.jsonl"));
     assert!(store.exists("sessions/sess-456.dir.tar.gz"));
@@ -252,7 +265,7 @@ fn push_session_encrypted_uses_age_extension() {
     };
 
     let cipher = crate::crypto::Cipher::Plaintext;
-    push_session(&session, &cipher, &store, true, false).unwrap();
+    push_session(&session, &cipher, &store, true, false, 3, false).unwrap();
     assert!(store.exists("sessions/enc-uuid.jsonl.age"));
 
     std::fs::remove_dir_all(&dir).ok();

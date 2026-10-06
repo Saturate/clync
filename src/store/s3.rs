@@ -131,6 +131,18 @@ impl Store for S3Store {
         self.write_file(rel_path, data)
     }
 
+    fn delete_file(&self, rel_path: &str) -> Result<()> {
+        let key = self.key(rel_path);
+        let response = self.bucket.delete_object(&key)?;
+        if response.status_code() >= 300 {
+            bail!(
+                "S3 delete failed for {key}: status {}",
+                response.status_code()
+            );
+        }
+        Ok(())
+    }
+
     fn sync_down(&self) -> Result<()> {
         Ok(())
     }
