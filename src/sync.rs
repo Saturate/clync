@@ -21,7 +21,8 @@ fn session_filename(uuid: &str, encrypted: bool, compressed: bool) -> String {
     match (encrypted, compressed) {
         (true, true) => format!("{uuid}.jsonl.zst.age"),
         (true, false) => format!("{uuid}.jsonl.age"),
-        _ => format!("{uuid}.jsonl"),
+        (false, true) => format!("{uuid}.jsonl.zst"),
+        (false, false) => format!("{uuid}.jsonl"),
     }
 }
 

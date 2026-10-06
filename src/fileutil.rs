@@ -14,7 +14,8 @@ pub fn storage_name(name: &str, encrypted: bool, compressed: bool) -> String {
     match (encrypted, compressed) {
         (true, true) => format!("{name}.zst.age"),
         (true, false) => format!("{name}.age"),
-        _ => name.to_string(),
+        (false, true) => format!("{name}.zst"),
+        (false, false) => name.to_string(),
     }
 }
 
@@ -113,11 +114,7 @@ pub fn sync_directory(
             continue;
         }
         let rel = entry.path().strip_prefix(src_dir)?;
-        let dst = dst_dir.join(storage_name(
-            &rel.to_string_lossy(),
-            encrypted,
-            compressed,
-        ));
+        let dst = dst_dir.join(storage_name(&rel.to_string_lossy(), encrypted, compressed));
         count += sync_file_if_changed(entry.path(), &dst, cipher, compressed, compression_level)?;
     }
     Ok(count)
@@ -141,6 +138,7 @@ pub fn restore_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Res
         let original_name = rel
             .strip_suffix(".zst.age")
             .or_else(|| rel.strip_suffix(".age"))
+            .or_else(|| rel.strip_suffix(".zst"))
             .unwrap_or(&rel);
         let dst = dst_dir.join(original_name);
         count += restore_file(entry.path(), &dst, cipher)?;

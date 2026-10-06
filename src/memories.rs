@@ -2,13 +2,13 @@ use anyhow::Result;
 use std::path::Path;
 use walkdir::WalkDir;
 
+use crate::compress;
 use crate::config::Config;
 use crate::crypto::Cipher;
 use crate::fileutil::{
     encrypted_name, is_encrypted, is_safe_path_component, is_traversal_safe, mtime_secs,
     restore_file, sync_directory,
 };
-use crate::compress;
 use crate::manifest::normalize_project_path;
 use crate::resolver::{build_remote_map, resolve_project_dir};
 
@@ -214,6 +214,7 @@ fn restore_memory_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> 
         let original_name = rel
             .strip_suffix(".zst.age")
             .or_else(|| rel.strip_suffix(".age"))
+            .or_else(|| rel.strip_suffix(".zst"))
             .unwrap_or(&rel);
         let dst = dst_dir.join(original_name);
 

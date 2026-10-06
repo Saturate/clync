@@ -54,17 +54,6 @@ impl Cipher {
         }
     }
 
-    pub fn encrypt_file(&self, src: &Path, dst: &Path) -> Result<()> {
-        let plaintext =
-            std::fs::read(src).with_context(|| format!("could not read {}", src.display()))?;
-        let encrypted = self.encrypt(&plaintext)?;
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(dst, encrypted)?;
-        Ok(())
-    }
-
     pub fn decrypt_file(&self, src: &Path) -> Result<Vec<u8>> {
         let data =
             std::fs::read(src).with_context(|| format!("could not read {}", src.display()))?;

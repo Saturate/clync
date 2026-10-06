@@ -106,7 +106,11 @@ pub fn pull_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPullResult>
     };
 
     if targets.settings {
-        pulled += restore_file(&find("settings.json"), &claude_dir.join("settings.json"), cipher)?;
+        pulled += restore_file(
+            &find("settings.json"),
+            &claude_dir.join("settings.json"),
+            cipher,
+        )?;
         pulled += restore_file(
             &find("settings.local.json"),
             &claude_dir.join("settings.local.json"),
