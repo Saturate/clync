@@ -90,7 +90,7 @@ fn folder_storage_roundtrip() {
         &machine_a.join("config"),
         &["push", "--no-sync"],
     );
-    assert!(push_out.contains("1 sessions"), "push output: {push_out}");
+    assert!(push_out.contains("1 encrypted"), "push output: {push_out}");
 
     // Verify manifest exists in shared folder
     assert!(

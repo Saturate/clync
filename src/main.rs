@@ -12,6 +12,7 @@ mod mcp;
 mod mcp_help;
 mod memories;
 mod merge;
+pub(crate) mod output;
 mod parser;
 mod repo_meta;
 mod resolver;
@@ -81,6 +82,10 @@ enum Cmd {
         #[arg(long)]
         no_sync: bool,
 
+        /// Show git output and other details
+        #[arg(long, short = 'v')]
+        verbose: bool,
+
         /// Only sync sessions modified within N days
         #[arg(long, value_name = "DAYS")]
         max_age: Option<u64>,
@@ -95,6 +100,10 @@ enum Cmd {
         #[arg(long)]
         no_sync: bool,
 
+        /// Show git output and other details
+        #[arg(long, short = 'v')]
+        verbose: bool,
+
         /// Only sync sessions modified within N days
         #[arg(long, value_name = "DAYS")]
         max_age: Option<u64>,
@@ -108,6 +117,10 @@ enum Cmd {
         /// Skip remote sync operations
         #[arg(long)]
         no_sync: bool,
+
+        /// Show git output and other details
+        #[arg(long, short = 'v')]
+        verbose: bool,
 
         /// Only sync sessions modified within N days
         #[arg(long, value_name = "DAYS")]
@@ -183,13 +196,17 @@ enum Cmd {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    /// Move a session to a different project directory
+    /// Move sessions to a different project directory
+    ///
+    /// With one arg: moves all sessions for the current directory's project.
+    /// With two args: if source matches a UUID prefix, moves that session;
+    /// otherwise treats source as a project path and moves all its sessions.
     Mv {
-        /// UUID or UUID prefix of the session to move
-        uuid: String,
+        /// Source (UUID prefix or project path), or target if only one arg
+        source_or_target: String,
 
         /// Target project path (e.g. ~/code/my-project)
-        target: String,
+        target: Option<String>,
     },
     /// Clone unmapped project repos referenced in synced sessions
     Checkout {
@@ -246,22 +263,25 @@ fn main() -> Result<()> {
         } => cmd::init::cmd_init(repo, onepassword, no_encrypt, &storage, &input),
         Cmd::Push {
             no_sync,
+            verbose,
             max_age,
             max_size,
-        } => cmd::sync_cmd::cmd_push(no_sync, cmd::build_filter(max_age, max_size)),
+        } => cmd::sync_cmd::cmd_push(no_sync, verbose, cmd::build_filter(max_age, max_size)),
         Cmd::Pull {
             no_sync,
+            verbose,
             max_age,
             max_size,
-        } => cmd::sync_cmd::cmd_pull(no_sync, cmd::build_filter(max_age, max_size)),
+        } => cmd::sync_cmd::cmd_pull(no_sync, verbose, cmd::build_filter(max_age, max_size)),
         Cmd::Sync {
             no_sync,
+            verbose,
             max_age,
             max_size,
         } => {
             let filter = cmd::build_filter(max_age, max_size);
-            cmd::sync_cmd::cmd_pull(no_sync, filter.clone())?;
-            cmd::sync_cmd::cmd_push(no_sync, filter)
+            cmd::sync_cmd::cmd_pull(no_sync, verbose, filter.clone())?;
+            cmd::sync_cmd::cmd_push(no_sync, verbose, filter)
         }
         Cmd::Status { max_age } => cmd::sync_cmd::cmd_status(cmd::build_filter(max_age, None)),
         Cmd::List {
@@ -279,7 +299,10 @@ fn main() -> Result<()> {
             no_encrypt,
         } => cmd::join::cmd_join(url, repo, onepassword, no_encrypt, &input),
         Cmd::Reset { keep_repo, yes } => cmd::init::cmd_reset(keep_repo, yes, &input),
-        Cmd::Mv { uuid, target } => cmd::cmd_mv(&uuid, &target),
+        Cmd::Mv {
+            source_or_target,
+            target,
+        } => cmd::cmd_mv(&source_or_target, target.as_deref()),
         Cmd::Checkout {
             list,
             all,

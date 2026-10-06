@@ -108,6 +108,8 @@ clync status     # see what's different
 | `sync` | Pull then push |
 | `status` | Show diff between local and remote |
 | `list [query]` | Search sessions by project, UUID, or content |
+| `mv [source] <target>` | Move sessions between projects (single or batch) |
+| `checkout` | Clone unmapped project repos referenced in synced sessions |
 | `log` | Show sync history (machine, operation, counts) |
 | `config` | `show`, `edit`, `path`, `set key value` |
 | `mcp` | Run as stdio MCP server |

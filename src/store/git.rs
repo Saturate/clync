@@ -3,14 +3,28 @@ use std::path::{Path, PathBuf};
 
 use super::{LocalFs, Store};
 
+enum PushError {
+    LargeFiles,
+    Other(anyhow::Error),
+}
+
 pub struct GitStore {
     fs: LocalFs,
+    verbose: bool,
 }
 
 impl GitStore {
     pub fn new(path: PathBuf) -> Self {
         Self {
             fs: LocalFs::new(path),
+            verbose: false,
+        }
+    }
+
+    pub fn with_verbose(path: PathBuf, verbose: bool) -> Self {
+        Self {
+            fs: LocalFs::new(path),
+            verbose,
         }
     }
 
@@ -22,13 +36,14 @@ impl GitStore {
     pub fn init_repo(repo_path: &Path) -> Result<Self> {
         std::fs::create_dir_all(repo_path)?;
         if !repo_path.join(".git").exists() {
-            let status = std::process::Command::new("git")
+            let output = std::process::Command::new("git")
                 .args(["init", "-b", "main"])
                 .current_dir(repo_path)
-                .status()
+                .output()
                 .context("git init failed")?;
-            if !status.success() {
-                bail!("git init failed");
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                bail!("git init failed: {}", stderr.trim());
             }
             std::fs::write(repo_path.join(".gitignore"), ".clync.lock\n")?;
         }
@@ -36,12 +51,13 @@ impl GitStore {
     }
 
     pub fn clone_repo(url: &str, dest: &Path) -> Result<Self> {
-        let status = std::process::Command::new("git")
-            .args(["clone", url, &dest.to_string_lossy()])
-            .status()
+        let output = std::process::Command::new("git")
+            .args(["clone", "--quiet", url, &dest.to_string_lossy()])
+            .output()
             .context("git clone failed")?;
-        if !status.success() {
-            bail!("git clone failed");
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("git clone failed: {}", stderr.trim());
         }
         Ok(Self::new(dest.to_path_buf()))
     }
@@ -106,17 +122,65 @@ impl GitStore {
         if !self.has_remote() {
             return Ok(());
         }
-        let result = self.run_git(&["push"]);
-        if result.is_err() {
-            let branch = std::process::Command::new("git")
-                .args(["branch", "--show-current"])
-                .current_dir(self.fs.root())
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .unwrap_or_else(|_| "main".into());
-            self.run_git(&["push", "--set-upstream", "origin", &branch])?;
+        match self.try_push() {
+            Ok(()) => Ok(()),
+            Err(PushError::LargeFiles) => {
+                eprintln!("lfs: push rejected due to large files, migrating history...");
+                crate::lfs::migrate_lfs_files(self.fs.root())?;
+                match self.try_push() {
+                    Ok(()) => Ok(()),
+                    Err(_) => self.run_git(&["push", "--force-with-lease"]),
+                }
+            }
+            Err(PushError::Other(e)) => Err(e),
         }
-        Ok(())
+    }
+
+    fn try_push(&self) -> Result<(), PushError> {
+        match self.push_capturing_stderr(&["push"]) {
+            Ok(()) => return Ok(()),
+            Err((_status, ref stderr)) if crate::lfs::is_large_file_push_error(stderr) => {
+                return Err(PushError::LargeFiles);
+            }
+            Err(_) => {}
+        }
+
+        let branch = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(self.fs.root())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "main".into());
+
+        match self.push_capturing_stderr(&["push", "--set-upstream", "origin", &branch]) {
+            Ok(()) => Ok(()),
+            Err((_status, ref stderr)) if crate::lfs::is_large_file_push_error(stderr) => {
+                Err(PushError::LargeFiles)
+            }
+            Err((status, _stderr)) => Err(PushError::Other(anyhow::anyhow!(
+                "git push --set-upstream origin {branch} exited with exit status: {status}"
+            ))),
+        }
+    }
+
+    fn push_capturing_stderr(&self, args: &[&str]) -> Result<(), (String, String)> {
+        let output = match std::process::Command::new("git")
+            .args(args)
+            .current_dir(self.fs.root())
+            .output()
+        {
+            Ok(o) => o,
+            Err(e) => return Err(("failed to execute".into(), e.to_string())),
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if self.verbose && !stderr.is_empty() {
+            eprint!("{stderr}");
+        }
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err((output.status.to_string(), stderr))
+        }
     }
 
     pub fn pull_remote(&self) -> Result<()> {
@@ -143,13 +207,25 @@ impl GitStore {
     }
 
     fn run_git(&self, args: &[&str]) -> Result<()> {
-        let status = std::process::Command::new("git")
-            .args(args)
-            .current_dir(self.fs.root())
-            .status()
-            .with_context(|| format!("git {} failed", args.join(" ")))?;
-        if !status.success() {
-            bail!("git {} exited with {}", args.join(" "), status);
+        if self.verbose {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(self.fs.root())
+                .status()
+                .with_context(|| format!("git {} failed", args.join(" ")))?;
+            if !status.success() {
+                bail!("git {} exited with {}", args.join(" "), status);
+            }
+        } else {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(self.fs.root())
+                .output()
+                .with_context(|| format!("git {} failed", args.join(" ")))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                bail!("git {} failed: {}", args.join(" "), stderr.trim());
+            }
         }
         Ok(())
     }

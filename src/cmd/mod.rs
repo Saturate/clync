@@ -285,7 +285,7 @@ pub(crate) fn format_age(mtime: u64) -> String {
     }
 }
 
-pub fn cmd_mv(uuid_prefix: &str, target: &str) -> Result<()> {
+pub fn cmd_mv(source_or_target: &str, target: Option<&str>) -> Result<()> {
     let claude_dir = config::home_dir()
         .context("cannot determine home directory")?
         .join(".claude");
@@ -294,20 +294,39 @@ pub fn cmd_mv(uuid_prefix: &str, target: &str) -> Result<()> {
     let filter = ScanFilter::default();
     let sessions = crate::scanner::scan_sessions(&projects_dir, &filter)?;
 
-    let matches: Vec<_> = sessions
-        .iter()
-        .filter(|s| s.uuid.starts_with(uuid_prefix))
-        .collect();
+    match target {
+        Some(target) => {
+            let uuid_matches: Vec<_> = sessions
+                .iter()
+                .filter(|s| s.uuid.starts_with(source_or_target))
+                .collect();
 
-    if matches.is_empty() {
-        bail!("no session matching '{uuid_prefix}'");
+            if !uuid_matches.is_empty() {
+                mv_single_session(&uuid_matches, source_or_target, target, &projects_dir)
+            } else {
+                mv_by_project(&sessions, source_or_target, target, &projects_dir)
+            }
+        }
+        None => {
+            let cwd = std::env::current_dir().context("cannot determine current directory")?;
+            let source = cwd.to_string_lossy().to_string();
+            mv_by_project(&sessions, &source, source_or_target, &projects_dir)
+        }
     }
+}
+
+fn mv_single_session(
+    matches: &[&crate::scanner::LocalSession],
+    uuid_prefix: &str,
+    target: &str,
+    projects_dir: &std::path::Path,
+) -> Result<()> {
     let session = if matches.len() == 1 {
         matches[0]
     } else {
         let same_uuid = matches.windows(2).all(|w| w[0].uuid == w[1].uuid);
         if !same_uuid {
-            for s in &matches {
+            for s in matches {
                 println!("  {} [{}]", short_uuid(&s.uuid), s.entry.project_path);
             }
             bail!(
@@ -326,7 +345,7 @@ pub fn cmd_mv(uuid_prefix: &str, target: &str) -> Result<()> {
         if let Some(s) = local {
             s
         } else {
-            for s in &matches {
+            for s in matches {
                 println!("  {} [{}]", short_uuid(&s.uuid), s.entry.project_path);
             }
             bail!(
@@ -335,11 +354,56 @@ pub fn cmd_mv(uuid_prefix: &str, target: &str) -> Result<()> {
             );
         }
     };
+
     let target_path = config::expand_path(&PathBuf::from(target));
     let encoded = target_path.to_string_lossy().replace('/', "-");
-
     let target_dir = projects_dir.join(&encoded);
-    std::fs::create_dir_all(&target_dir)?;
+
+    move_session(session, &target_dir, &encoded, projects_dir)
+}
+
+fn mv_by_project(
+    sessions: &[crate::scanner::LocalSession],
+    source: &str,
+    target: &str,
+    projects_dir: &std::path::Path,
+) -> Result<()> {
+    let source_path = config::expand_path(&PathBuf::from(source));
+    let source_encoded = source_path.to_string_lossy().replace('/', "-");
+
+    let matching: Vec<_> = sessions
+        .iter()
+        .filter(|s| s.project_dir_name == source_encoded)
+        .collect();
+
+    if matching.is_empty() {
+        bail!("no sessions found for project '{source}'");
+    }
+
+    let target_path = config::expand_path(&PathBuf::from(target));
+    let target_encoded = target_path.to_string_lossy().replace('/', "-");
+    let target_dir = projects_dir.join(&target_encoded);
+
+    let count = matching.len();
+    let mut moved = 0u32;
+    for session in &matching {
+        match move_session(session, &target_dir, &target_encoded, projects_dir) {
+            Ok(()) => moved += 1,
+            Err(e) => eprintln!("warning: {}: {e}", short_uuid(&session.uuid)),
+        }
+    }
+
+    println!("moved {moved}/{count} sessions to [{target_encoded}]");
+    Ok(())
+}
+
+fn move_session(
+    session: &crate::scanner::LocalSession,
+    target_dir: &std::path::Path,
+    target_encoded: &str,
+    _projects_dir: &std::path::Path,
+) -> Result<()> {
+    std::fs::create_dir_all(target_dir)?;
 
     let src_jsonl = &session.jsonl_path;
     let dst_jsonl = target_dir.join(format!("{}.jsonl", session.uuid));
@@ -361,10 +425,9 @@ pub fn cmd_mv(uuid_prefix: &str, target: &str) -> Result<()> {
     }
 
     println!(
-        "moved {} from [{}] to [{}]",
+        "moved {} from [{}] to [{target_encoded}]",
         short_uuid(&session.uuid),
         session.entry.project_path,
-        encoded
     );
 
     let src_project_dir = src_jsonl.parent().unwrap_or(std::path::Path::new("."));

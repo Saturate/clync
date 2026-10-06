@@ -342,7 +342,7 @@ fn init_push_status() {
     );
 
     let out = a.push();
-    assert!(out.contains("1 sessions synced"), "push: {out}");
+    assert!(out.contains("1 encrypted"), "push: {out}");
 
     let status = a.status();
     assert!(status.contains("in sync"), "status: {status}");
@@ -361,7 +361,7 @@ fn push_idempotent() {
 
     a.push();
     let out = a.push();
-    assert!(out.contains("0 sessions"), "second push should skip: {out}");
+    assert!(!out.contains("encrypted"), "second push should skip: {out}");
 }
 
 #[test]
@@ -510,7 +510,7 @@ fn multiple_sessions_multiple_projects() {
     );
 
     let out = a.push();
-    assert!(out.contains("3 sessions"), "should push 3: {out}");
+    assert!(out.contains("3 encrypted"), "should push 3: {out}");
 
     let b = env.machine("b");
     b.join();
@@ -596,7 +596,7 @@ fn empty_session_handled() {
     a.write_session("proj", "empty", &[&mode_entry()]);
     let out = a.push();
     assert!(
-        out.contains("1 sessions"),
+        out.contains("1 encrypted"),
         "should push empty session: {out}"
     );
 
@@ -927,7 +927,7 @@ fn modified_session_detected() {
 
     let push_out = a.push();
     assert!(
-        push_out.contains("1 sessions"),
+        push_out.contains("1 encrypted"),
         "should push modified: {push_out}"
     );
 }
@@ -1046,7 +1046,7 @@ fn large_session_sync() {
 
     let out = a.push();
     assert!(
-        out.contains("1 sessions"),
+        out.contains("1 encrypted"),
         "should push large session: {out}"
     );
 
@@ -1730,7 +1730,7 @@ fn push_no_changes() {
     a.init();
 
     let out = a.run_ok(&["push", "--no-sync"]);
-    assert!(out.contains("0 sessions"), "no sessions to push: {out}");
+    assert!(out.contains("0 unchanged"), "no sessions to push: {out}");
 }
 
 #[test]
@@ -1786,7 +1786,7 @@ fn push_with_max_age_filter() {
     );
 
     let out = a.run_ok(&["push", "--no-sync", "--max-age", "1"]);
-    assert!(out.contains("sessions"), "should run with filter: {out}");
+    assert!(out.contains("push"), "should run with filter: {out}");
 }
 
 #[test]
@@ -1801,10 +1801,13 @@ fn push_with_max_size_filter() {
     );
 
     let out = a.run_ok(&["push", "--no-sync", "--max-size", "1000000"]);
-    assert!(out.contains("1 sessions"), "should push within size: {out}");
+    assert!(
+        out.contains("1 encrypted"),
+        "should push within size: {out}"
+    );
 
     let out2 = a.run_ok(&["push", "--no-sync", "--max-size", "10"]);
-    assert!(out2.contains("0 sessions"), "should skip large: {out2}");
+    assert!(out2.contains("0 unchanged"), "should skip large: {out2}");
 }
 
 #[test]
@@ -1834,7 +1837,7 @@ fn folder_storage_init_and_push() {
     );
 
     let out = a.run_ok(&["push", "--no-sync"]);
-    assert!(out.contains("1 sessions"), "push output: {out}");
+    assert!(out.contains("1 encrypted"), "push output: {out}");
 
     assert!(
         a.sync_repo.join("manifest.json").exists(),
@@ -1914,6 +1917,64 @@ fn mv_session_no_match() {
 }
 
 #[test]
+fn mv_batch_by_project_path() {
+    let env = TestEnv::new("mv_batch");
+    let a = env.machine("a");
+    a.init();
+
+    let source_path = a.home.join("code").join("old-project");
+    let source_encoded = source_path.to_string_lossy().replace('/', "-");
+
+    a.write_session(
+        &source_encoded,
+        "s1",
+        &[&mode_entry(), &msg("m1", None, 100, "user", "first")],
+    );
+    a.write_session(
+        &source_encoded,
+        "s2",
+        &[&mode_entry(), &msg("m2", None, 200, "user", "second")],
+    );
+
+    let target_path = a.home.join("code").join("new-project");
+    let out = a.run_ok(&[
+        "mv",
+        &source_path.to_string_lossy(),
+        &target_path.to_string_lossy(),
+    ]);
+    assert!(out.contains("moved 2/2"), "batch output: {out}");
+
+    assert!(
+        a.find_session_file("s1").is_some(),
+        "s1 should exist in new project"
+    );
+    assert!(
+        a.find_session_file("s2").is_some(),
+        "s2 should exist in new project"
+    );
+
+    let target_encoded = target_path.to_string_lossy().replace('/', "-");
+    let s1_path = a.find_session_file("s1").unwrap();
+    assert!(
+        s1_path.to_string_lossy().contains(&*target_encoded),
+        "s1 should be in target dir"
+    );
+}
+
+#[test]
+fn mv_no_source_project_fails() {
+    let env = TestEnv::new("mv_no_source");
+    let a = env.machine("a");
+    a.init();
+
+    let output = a.run(&["mv", "/some/nonexistent/source", "/tmp/target"]);
+    assert!(
+        !output.status.success(),
+        "should fail when source project has no sessions"
+    );
+}
+
+#[test]
 fn encrypted_push_pull_roundtrip() {
     let env = TestEnv::new("encrypted_roundtrip");
     let a = env.machine("a");
@@ -1929,7 +1990,7 @@ fn encrypted_push_pull_roundtrip() {
     );
 
     let out = a.push();
-    assert!(out.contains("1 sessions"), "push: {out}");
+    assert!(out.contains("1 encrypted"), "push: {out}");
 
     // Verify the stored file is encrypted (not plaintext)
     let session_file = a.sync_repo.join("sessions").join("s1.jsonl.age");
@@ -2047,7 +2108,7 @@ fn companion_dir_sync() {
     std::fs::write(companion_dir.join("sub").join("nested.txt"), "nested data").unwrap();
 
     let out = a.push();
-    assert!(out.contains("1 sessions synced"), "push: {out}");
+    assert!(out.contains("1 encrypted"), "push: {out}");
 
     // Verify companion tar exists in sync repo
     let tar_file = a.sync_repo.join("sessions").join("s1.dir.tar.gz");
