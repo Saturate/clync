@@ -18,6 +18,7 @@ pub trait Store: Send + Sync {
     fn file_size(&self, rel_path: &str) -> Result<u64>;
     fn atomic_write(&self, rel_path: &str, data: &[u8]) -> Result<()>;
     fn delete_file(&self, rel_path: &str) -> Result<()>;
+    fn rename_file(&self, from: &str, to: &str) -> Result<()>;
 
     fn sync_down(&self) -> Result<()>;
     fn sync_up(&self, message: &str) -> Result<()>;
@@ -100,6 +101,16 @@ impl LocalFs {
         if full_path.exists() {
             std::fs::remove_file(&full_path)?;
         }
+        Ok(())
+    }
+
+    pub fn rename_file(&self, from: &str, to: &str) -> Result<()> {
+        let src = self.root.join(from);
+        let dst = self.root.join(to);
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(&src, &dst)?;
         Ok(())
     }
 

@@ -30,12 +30,12 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
     let comp = config.sync.compression;
     let level = config.sync.compression_level;
 
-    let cleanup_old = |name: &str| {
+    let rename_old = |name: &str| {
         if comp {
             let new = extras_dir.join(storage_name(name, enc, true));
             let old = extras_dir.join(storage_name(name, enc, false));
-            if new.exists() && old.exists() {
-                std::fs::remove_file(&old).ok();
+            if !new.exists() && old.exists() {
+                std::fs::rename(&old, &new).ok();
             }
         }
     };
@@ -43,6 +43,7 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
     let mut pushed = 0u32;
 
     if targets.settings {
+        rename_old("settings.json");
         pushed += sync_file_if_changed(
             &claude_dir.join("settings.json"),
             &extras_dir.join(storage_name("settings.json", enc, comp)),
@@ -50,7 +51,7 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
             comp,
             level,
         )?;
-        cleanup_old("settings.json");
+        rename_old("settings.local.json");
         pushed += sync_file_if_changed(
             &claude_dir.join("settings.local.json"),
             &extras_dir.join(storage_name("settings.local.json", enc, comp)),
@@ -58,7 +59,6 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
             comp,
             level,
         )?;
-        cleanup_old("settings.local.json");
     }
     if targets.commands {
         pushed += sync_directory(
@@ -81,6 +81,7 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
         )?;
     }
     if targets.global_claude_md {
+        rename_old("CLAUDE.md");
         pushed += sync_file_if_changed(
             &claude_dir.join("CLAUDE.md"),
             &extras_dir.join(storage_name("CLAUDE.md", enc, comp)),
@@ -88,7 +89,6 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
             comp,
             level,
         )?;
-        cleanup_old("CLAUDE.md");
     }
 
     Ok(ExtrasPushResult { pushed })

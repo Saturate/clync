@@ -265,6 +265,10 @@ impl Store for GitStore {
         self.fs.delete_file(rel_path)
     }
 
+    fn rename_file(&self, from: &str, to: &str) -> Result<()> {
+        self.fs.rename_file(from, to)
+    }
+
     fn sync_down(&self) -> Result<()> {
         self.pull_remote()
     }
