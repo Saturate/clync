@@ -24,8 +24,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
-      - name: Install cargo-changeset
-        run: cargo install cargo-changeset --version 0.1.7
+      - name: Install changesetter
+        run: cargo install changesetter --version 0.2.0
 
       - name: Configure git
         run: |
@@ -33,13 +33,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Check for pending changesets
-        run: |
-          status=$(cargo changeset status 2>&1)
-          if echo "$status" | grep -q "No pending changesets"; then
-            echo "No changesets to release"
-            exit 1
-          fi
-          echo "$status"
+        run: changesetter status
 
       - name: Get current version
         id: before
@@ -52,7 +46,7 @@ jobs:
         env:
           OLD_VERSION: ${{ steps.before.outputs.version }}
         run: |
-          cargo changeset release --no-tags
+          changesetter release
           version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           if [ -z "$version" ]; then
             echo "Failed to extract version from Cargo.toml" >&2
@@ -64,12 +58,8 @@ jobs:
           fi
           echo "version=$version" >> $GITHUB_OUTPUT
 
-      - name: Tag and push
-        env:
-          RELEASE_VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          git tag "v${RELEASE_VERSION}"
-          git push origin main --tags
+      - name: Push
+        run: git push origin main --tags
 
   publish:
     name: Publish to crates.io

@@ -64,15 +64,12 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+      - name: Install changesetter
+        run: cargo install changesetter --version 0.2.0
       - name: Check for changeset
-        run: |
-          files=$(git diff --name-only origin/main...HEAD -- '.changeset/changesets/*.md')
-          if [ -z "$files" ]; then
-            echo "No changeset found. Add one with:"
-            echo "  cargo changeset add -p clync -b patch -c fixed -m \"Description\""
-            echo "  cargo changeset add -p clync -b none -c changed -m \"No user-facing changes\""
-            exit 1
-          fi
+        run: changesetter check --base origin/main
 
   fmt:
     name: Format

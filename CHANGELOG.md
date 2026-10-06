@@ -2,6 +2,26 @@
 
 All notable changes to clync will be documented in this file.
 
+## 0.4.1 - 2026-08-10
+
+### Added
+
+- Checkout command with TUI for discovering and cloning unmapped project repos
+- `clone_base` config option for default clone directory
+- Remote URLs stored in manifest during push for cross-machine project discovery
+
+### Fixed
+
+- Default config directory to `~/.clync/` instead of `~/.config/clync/`, with fallback for existing installs
+- Silently skip orphaned manifest entries on pull and report as "archived" instead of warning
+
+## 0.4.0 - 2026-07-08
+
+### Added
+
+- Support for multiple storage backends: git (default), local folder (NAS/Dropbox/USB), and S3-compatible cloud storage (AWS, R2, MinIO)
+- Move sessions between project directories with `clync mv`
+
 ## 0.3.0
 
 ### Added
@@ -48,52 +68,3 @@ All notable changes to clync will be documented in this file.
 ### Fixed
 
 - Better error messages on decryption failures
-
-## [0.4.3] - 2026-10-06
-### Added
-
-- **clync**: Add `--recompress` flag to `push` and `sync` to re-push all sessions through the compression pipeline
-- **clync**: Compress data with zstd before encryption, reducing sync repo size by ~65-70%. Configure with `compression` and `compression_level` in config. Pull auto-detects both formats for backward compatibility.
-- **clync**: Batch move: `clync mv <source-project> <target>` moves all sessions between projects, and `clync mv <target>` moves all sessions for the current directory's project
-
-### Changed
-
-- **clync**: Git output is now suppressed by default during sync; use --verbose/-v to see it
-
-### Fixed
-
-- **clync**: Fix partial batch move silently succeeding, LFS push recovery dropping errors, and CI MinIO image pull failure
-
-## [0.4.2] - 2026-08-19
-### Fixed
-
-- **clync**: Sessions with normalized paths that failed strict validation are no longer silently skipped during pull
-
-## [0.4.1] - 2026-08-10
-### Added
-
-- **clync**: Checkout command with TUI for discovering and cloning unmapped project repos
-
-### Changed
-
-- **clync**: Internal architectural changes
-- **clync**: Silently skip orphaned manifest entries on pull and report them as "archived" instead of warning
-- **clync**: Default config directory to ~/.clync/ instead of ~/.config/clync/, with fallback to legacy XDG path for existing installs
-
-## [0.4.0] - 2026-07-08
-### Added
-
-- **clync**: Support for multiple storage backends: git (default), local folder (NAS/Dropbox/USB), and S3-compatible cloud storage (AWS, R2, MinIO)
-- **clync**: Move sessions between project directories with clync mv
-
-### Changed
-
-- **clync**: Internal architectural changes
-
-[0.4.0]: https://github.com/Saturate/clync/compare/v0.3.0...v0.4.0
-
-[0.4.1]: https://github.com/Saturate/clync/compare/v0.4.0...v0.4.1
-
-[0.4.2]: https://github.com/Saturate/clync/compare/v0.4.1...v0.4.2
-
-[0.4.3]: https://github.com/Saturate/clync/compare/v0.4.2...v0.4.3
