@@ -2,6 +2,13 @@
 
 All notable changes to clync will be documented in this file.
 
+
+## 0.5.0 - 2026-10-07
+
+Switch from cargo-changeset to changesetter for release management
+
+Version bump to 0.5.0 for compression and batch move features
+
 ## 0.4.1 - 2026-08-10
 
 ### Added
