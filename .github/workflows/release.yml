@@ -47,6 +47,9 @@ jobs:
           OLD_VERSION: ${{ steps.before.outputs.version }}
         run: |
           changesetter release
+          cargo check --quiet
+          git add Cargo.lock
+          git commit --amend --no-edit
           version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           if [ -z "$version" ]; then
             echo "Failed to extract version from Cargo.toml" >&2
