@@ -6,7 +6,7 @@ Users work across multiple AI coding tools (Claude Code, opencode, pi). Each sto
 
 ## Goal
 
-Add `clync convert` to translate sessions between Claude Code, opencode, and pi (all directions). The converted sessions should be browsable in the target tool and contain the full conversation with tool call history.
+Add `clync convert` to translate sessions between Claude Code, opencode (v2 only), and pi (all directions). The converted sessions should be browsable in the target tool and contain the full conversation with tool call history.
 
 Architecture: each format has a reader (into an intermediate representation) and a writer (from IR to target format). Adding a new tool means implementing one reader + one writer, and it automatically converts to/from all other tools.
 
@@ -18,7 +18,7 @@ clync convert --from claude --to opencode <session-uuid-or-path>
 clync convert --from claude --to opencode --all          # convert all sessions
 clync convert --from claude --to opencode --project <dir> # sessions for one project (real path, not encoded)
 
-# opencode -> Claude Code  
+# opencode -> Claude Code
 clync convert --from opencode --to claude <session-id>
 clync convert --from opencode --to claude --all
 
@@ -48,51 +48,87 @@ clync convert --from claude --to opencode --dry-run <session>
 
 **Location:** `~/.claude/projects/<encoded-project-dir>/<uuid>.jsonl`
 
-**Storage:** One JSONL file per session. Each line is a JSON object. Lines form a tree via `uuid`/`parentUuid` fields.
+**Storage:** One JSONL file per session. Each line is a JSON object. Lines form a tree via `uuid`/`parentUuid` fields. Each assistant entry contains exactly **one** content block (one entry per thinking, text, or tool_use block; they are never combined).
 
 **Entry types** (the `type` field):
 
 | Type | Purpose | Convertible |
 |------|---------|-------------|
-| `user` | User message | Yes |
-| `assistant` | Assistant response (text, tool_use, thinking) | Yes |
-| `system` | Hook summaries, stop reasons | No (Claude-specific) |
+| `user` | User message (plain text or tool_result blocks) | Yes |
+| `assistant` | Assistant response (one of: text, tool_use, thinking) | Yes |
+| `system` | Hook summaries, stop reasons | No |
 | `attachment` | Hook context injections | No |
 | `mode` | Agent mode (normal/plan/etc) | No |
 | `permission-mode` | Permission level | No |
 | `bridge-session` | Cloud session linking | No |
-| `ai-title` | Auto-generated title | Yes (as session title) |
+| `ai-title` | Auto-generated title | Yes (session title) |
 | `last-prompt` | Cursor state | No |
+| `file-history-snapshot` | File change tracking | No |
+| `file-history-delta` | File change tracking | No |
+| `queue-operation` | Queue management | No |
+| `pr-link` | PR association | No |
+| `cost-state` | Cost tracking | No |
+| `atis-latch` | Internal state | No |
 
-**User message structure:**
+**User message (plain text):**
 ```json
 {
   "parentUuid": "previous-uuid",
   "isSidechain": false,
   "type": "user",
   "uuid": "this-uuid",
+  "timestamp": "2026-08-10T13:21:02.020Z",
   "message": {
     "role": "user",
     "content": "the user's text"
-  }
+  },
+  "sessionId": "session-uuid",
+  "version": "2.1.226",
+  "cwd": "/Users/alkj/code/github/clync"
 }
 ```
 
-Note: `content` can be a string or an array of content blocks.
+Note: `message.content` can be a string or an array of content blocks. The `version`, `cwd`, `sessionId` fields appear on user entries.
 
-**Assistant message structure:**
+**User message (tool result):** Tool results are `type: "user"` entries where `message.content` is an array of `tool_result` blocks:
 ```json
 {
-  "parentUuid": "user-uuid",
+  "parentUuid": "assistant-uuid",
   "isSidechain": false,
+  "type": "user",
+  "uuid": "result-uuid",
+  "timestamp": "2026-08-10T13:21:05.000Z",
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01UHL3j13a9fpiXbmcK4dbzQ",
+        "content": "command output here",
+        "is_error": false
+      }
+    ]
+  },
+  "toolUseResult": { ... },
+  "sourceToolAssistantUUID": "assistant-entry-uuid"
+}
+```
+
+Note: There is **no** separate `type: "tool_result"` top-level entry type. Tool results are always `type: "user"` with `tool_result` content blocks.
+
+**Assistant message (one block per entry):**
+```json
+{
+  "parentUuid": "previous-uuid",
+  "isSidechain": false,
+  "type": "assistant",
   "uuid": "this-uuid",
+  "timestamp": "2026-08-10T13:21:04.000Z",
   "message": {
     "model": "claude-opus-4-8",
     "id": "msg_...",
     "role": "assistant",
     "content": [
-      {"type": "thinking", "thinking": "...", "signature": "..."},
-      {"type": "text", "text": "response text"},
       {"type": "tool_use", "id": "toolu_...", "name": "Bash", "input": {"command": "ls"}}
     ],
     "stop_reason": "end_turn|tool_use",
@@ -106,123 +142,164 @@ Note: `content` can be a string or an array of content blocks.
 }
 ```
 
-**Tool result** (separate entry, follows the assistant tool_use):
-```json
-{
-  "parentUuid": "assistant-uuid",
-  "type": "tool_result",
-  "uuid": "result-uuid",
-  "tool_use_id": "toolu_...",
-  "content": "command output here"
-}
-```
+Each assistant entry has `message.content` as an array with exactly one block. Block types: `thinking` (with `thinking` and `signature` fields), `text` (with `text` field), `tool_use` (with `id`, `name`, `input` fields). A sequence like thinking + text + tool_use + tool_use produces four separate assistant entries, each with a `parentUuid` pointing to the previous one.
 
-Note: Tool results don't have a `type` field at the top level sometimes; identify them by presence of `tool_use_id`. The `content` can be a string or array of content blocks.
+**Claude tool names:** `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Agent`, `WebFetch`, `WebSearch`, `AskUserQuestion`, plus MCP tool names (e.g. `mcp__chrome-devtools__click`).
 
-**Claude tool names:** `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Agent`, `WebFetch`, `WebSearch`, `AskUserQuestion`, plus MCP tool names.
+### opencode sessions (v2 only)
 
-### opencode sessions
+**Location:** `~/.local/share/opencode/opencode.db` (SQLite). Respects `$XDG_DATA_HOME` if set.
 
-**Location:** `~/.local/share/opencode/opencode.db` (SQLite)
+We target opencode >= 2.0 only. The v1 format (`session` + `message` + `part` tables) is not supported; opencode 2.x no longer writes to those tables for new sessions.
 
-**Tables:**
+**Tables used for v2:**
 
 **`project`** - Project registry:
-- `id` (text PK) - SHA1 hash of worktree path
-- `worktree` (text) - absolute path, e.g. `/Users/alkj/code/github/clync`
-- `vcs` (text) - e.g. `"git"`
-- `name` (text) - project name
+```sql
+CREATE TABLE project (
+  id text PRIMARY KEY,              -- SHA1 of worktree path
+  worktree text NOT NULL,           -- absolute path
+  vcs text,                         -- e.g. "git"
+  name text,                        -- project name (basename of path)
+  icon_url text,
+  icon_url_override text,
+  icon_color text,
+  time_created integer NOT NULL,    -- epoch ms
+  time_updated integer NOT NULL,
+  time_initialized integer,
+  sandboxes text NOT NULL,          -- JSON, default "[]"
+  commands text,
+  time_active integer DEFAULT 0 NOT NULL,
+  time_archived integer
+);
+```
 
-**`session`** - Session metadata:
-- `id` (text PK) - e.g. `ses_0b42fb309ffe1Q1xG9O7qyeDjK`
-- `project_id` (text FK -> project.id)
-- `parent_id` (text, nullable) - for branched sessions
-- `directory` (text) - working directory
-- `title` (text) - session title
-- `agent` (text) - e.g. `"build"`
-- `model` (text) - JSON: `{"id":"model-id","providerID":"provider"}`
-- `cost` (real) - total cost
-- `tokens_input`, `tokens_output`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write` (integer)
-- `time_created`, `time_updated` (integer, milliseconds)
-- `slug` (text) - URL-friendly identifier
-- `version` (text) - opencode version
+**`session_v2`** - Session metadata:
+```sql
+CREATE TABLE session_v2 (
+  id text PRIMARY KEY,              -- e.g. "ses_ea2c57b5cffejQAqoGtwUPwxPk"
+  project_id text NOT NULL,         -- FK -> project.id
+  workspace_id text,
+  parent_id text,
+  fork_session_id text,
+  fork_boundary text,
+  slug text NOT NULL,
+  directory text NOT NULL,          -- working directory
+  path text,
+  title text,
+  version text NOT NULL,            -- opencode version
+  share_url text,
+  summary_additions integer,
+  summary_deletions integer,
+  summary_files integer,
+  summary_diffs text,
+  metadata text,                    -- nullable JSON, used for provenance
+  cost real DEFAULT 0 NOT NULL,
+  tokens_input integer DEFAULT 0 NOT NULL,
+  tokens_output integer DEFAULT 0 NOT NULL,
+  tokens_reasoning integer DEFAULT 0 NOT NULL,
+  tokens_cache_read integer DEFAULT 0 NOT NULL,
+  tokens_cache_write integer DEFAULT 0 NOT NULL,
+  revert text,
+  permission text,
+  agent text,
+  model text,                       -- JSON: {"id":"model-id","providerID":"provider","variant":"default"}
+  time_created integer NOT NULL,    -- epoch ms
+  time_updated integer NOT NULL,
+  time_compacting integer,
+  time_archived integer,
+  time_suspended integer,
+  resume_attempts integer DEFAULT 0 NOT NULL,
+  time_idle integer,
+  time_viewed integer,
+  idle_outcome text,
+  CONSTRAINT fk FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE
+);
+```
 
-**`message`** - One row per conversation turn:
-- `id` (text PK) - e.g. `msg_f4bd04d0a001syHG0qwZJWM5ww`
-- `session_id` (text FK)
-- `data` (text JSON) - message metadata
-- `time_created`, `time_updated` (integer ms)
+**`session_message`** - All messages in a session (replaces v1's separate message + part tables):
+```sql
+CREATE TABLE session_message (
+  id text PRIMARY KEY,
+  session_id text NOT NULL,         -- FK -> session_v2.id
+  type text NOT NULL,               -- "user", "assistant", "idle", "synthetic", "system", "compaction", "model-switched"
+  seq integer NOT NULL,             -- explicit ordering
+  time_created integer NOT NULL,    -- epoch ms
+  time_updated integer NOT NULL,
+  data text NOT NULL,               -- JSON, structure varies by type
+  CONSTRAINT fk FOREIGN KEY (session_id) REFERENCES session_v2(id) ON DELETE CASCADE
+);
+-- Unique index on (session_id, seq)
+```
 
-User message data:
+**session_message types:**
+
+| type | Convertible | Notes |
+|------|-------------|-------|
+| `user` | Yes | User text input |
+| `assistant` | Yes | Assistant response with inline tool calls |
+| `idle` | No | Session idle events |
+| `synthetic` | No | Shell output, subagent results, interrupts |
+| `system` | No | Tool catalog updates, instructions |
+| `compaction` | No | Context summarization |
+| `model-switched` | No | Model change events |
+
+**User message data (v2):**
 ```json
 {
-  "role": "user",
-  "time": {"created": 1783683370250},
-  "agent": "build",
-  "model": {"providerID": "ollama", "modelID": "allangpt:q8"}
+  "time": {"created": 1792565478670},
+  "text": "the user's text",
+  "files": [],
+  "agents": []
 }
 ```
 
-Assistant message data:
+Note: v2 user messages use `text` (string), not `role`/`content` like v1. No `role` field.
+
+**Assistant message data (v2):**
 ```json
 {
-  "parentID": "msg_user_id",
-  "role": "assistant",
-  "mode": "build",
+  "time": {
+    "created": 1792565478688,
+    "streamed": 1792565546451,
+    "completed": 1792565546555
+  },
   "agent": "build",
-  "path": {"cwd": "/path", "root": "/path"},
+  "model": {"id": "model-id", "providerID": "provider", "variant": "default"},
+  "content": [
+    {"type": "reasoning", "text": "...", "native": {"reasoningField": "reasoning"}, "time": {...}},
+    {"type": "text", "text": "response text"},
+    {"type": "tool", "id": "call_1k30c600", "name": "shell", "executed": false,
+     "state": {
+       "status": "completed",
+       "input": {"command": "ls"},
+       "content": [{"type": "text", "text": "output here"}],
+       "metadata": {"status": "completed", "truncated": false, "exit": 0}
+     },
+     "time": {"created": 1792565543541, "ran": 1792565546448, "completed": 1792565546490}
+    }
+  ],
+  "snapshot": {"start": "git-sha", "end": "git-sha", "files": []},
+  "finish": "tool-calls|stop|error",
+  "rawFinish": "tool_calls|stop",
   "cost": 0,
-  "tokens": {"total": 16868, "input": 16662, "output": 206, "reasoning": 0, "cache": {"write": 0, "read": 0}},
-  "modelID": "allangpt:q8",
-  "providerID": "ollama",
-  "time": {"created": 1783683370265, "completed": 1783683550911},
-  "finish": "tool-calls|stop"
+  "tokens": {"input": 100, "output": 50, "reasoning": 0, "cache": {"write": 0, "read": 0}}
 }
 ```
 
-**`part`** - Message content (multiple parts per message):
-- `id` (text PK)
-- `message_id` (text FK -> message.id)
-- `session_id` (text FK)
-- `data` (text JSON)
-- `time_created`, `time_updated` (integer ms)
+Key v2 differences from v1 spec:
+- Tool results are **inline** in the assistant content block's `state.content` (array of `{type: "text", text}` blocks), not in `state.output` (string).
+- Tool blocks use `name` field (not `tool` as in v1 parts) and `id` (not `callID`).
+- `state.metadata` contains extra fields like `preview`, `display`, `truncated`, `exit`, `matches`.
+- Reasoning blocks use `type: "reasoning"` (not `thinking`), with `native.reasoningField`.
 
-Part types:
-
-Text:
-```json
-{"type": "text", "text": "the content"}
-```
-
-Tool call (includes both input AND result in one part):
-```json
-{
-  "type": "tool",
-  "tool": "read",
-  "callID": "call_d9rjs2ij",
-  "state": {
-    "status": "completed",
-    "input": {"filePath": "/path/to/file"},
-    "output": "file contents...",
-    "title": "README.md",
-    "time": {"start": 1783683371000, "end": 1783683372000}
-  }
-}
-```
-
-Step markers (wrap each assistant turn):
-```json
-{"type": "step-start", "snapshot": "git-sha"}
-{"type": "step-finish", "reason": "tool-calls|stop", "snapshot": "git-sha", "tokens": {...}, "cost": 0}
-```
-
-**opencode tool names:** `bash`, `read`, `write`, `edit`, `grep`, `glob`, `fetch`, `task` (subagent).
+**opencode v2 tool names:** `shell` (primary; replaces v1's `bash`), `read`, `write`, `edit`, `grep`, `glob`, `webfetch`, `websearch`, `subagent` (replaces v1's `task`), `question`, `skill`, `todowrite`.
 
 ### pi sessions
 
 **Location:** `~/.pi/agent/sessions/<encoded-project-dir>/<timestamp>_<uuid>.jsonl`
 
-**Storage:** One JSONL file per session, similar to Claude. Each line is a JSON object. Lines form a chain via `id`/`parentId` fields. Project dirs are double-dash encoded: `--Users-alkj-code-github-clync--`.
+**Storage:** One JSONL file per session. Each line is a JSON object. Lines form a chain via `id`/`parentId` fields. Project dirs are double-dash encoded: `--Users-alkj-code-github-clync--`.
 
 **Entry types** (the `type` field):
 
@@ -230,9 +307,9 @@ Step markers (wrap each assistant turn):
 |------|---------|-------------|
 | `session` | Session header (version, id, cwd) | Yes (metadata) |
 | `message` | User, assistant, and tool result messages | Yes |
-| `model_change` | Model switch event | No (metadata only) |
+| `model_change` | Model switch event | No |
 | `thinking_level_change` | Thinking level toggle | No |
-| `compaction` | Context window summarization | No (internal optimization) |
+| `compaction` | Context window summarization | No |
 
 **Session header:**
 ```json
@@ -262,7 +339,7 @@ Step markers (wrap each assistant turn):
 }
 ```
 
-**Assistant message** (can contain text, toolCall, thinking):
+**Assistant message** (can contain text, toolCall, thinking in one entry):
 ```json
 {
   "type": "message",
@@ -283,7 +360,9 @@ Step markers (wrap each assistant turn):
 }
 ```
 
-**Tool result** (separate message, role is `toolResult`):
+Note: pi uses `arguments` (not `input`) for tool call parameters, and `toolCall` (camelCase) as the content block type.
+
+**Tool result** (separate message entry):
 ```json
 {
   "type": "message",
@@ -302,60 +381,50 @@ Step markers (wrap each assistant turn):
 }
 ```
 
-**pi tool names:** `bash`, `read`, `write`, `edit`, `grep`, `glob`, `fetch`, `task`.
+**Thinking blocks in pi:** Use `thinkingSignature` field (not `signature` as in Claude):
+```json
+{"type": "thinking", "thinking": "...", "thinkingSignature": "reasoning"}
+```
+
+**pi tool names (observed):** `bash`, `read`, `write`, `edit`, `grep`, `glob`. No `fetch` or `task` observed, but listed in pi docs.
 
 **Key differences from Claude:**
 - Threading uses `id`/`parentId` (short hex IDs) instead of `uuid`/`parentUuid` (UUIDv4)
 - Content is always an array (never a plain string)
-- Tool results are separate messages with `role: "toolResult"` (similar to Claude's separate `tool_result` entries)
-- Tool names are lowercase (like opencode, unlike Claude's PascalCase)
-- Has `compaction` entries for context window management (no equivalent in Claude/opencode)
+- Tool calls use `arguments` field (not `input`)
+- Tool calls use `toolCall` type (not `tool_use`)
+- Tool results are separate messages with `role: "toolResult"`
+- Tool names are lowercase
 - Project dir encoding uses double-dashes: `--Users-alkj-code--` vs Claude's single-dash `-Users-alkj-code`
+- Unlike Claude, pi can have multiple content blocks per assistant entry
 
 ## Intermediate Representation (IR)
 
-All conversions go through a common IR. Adding a new tool means implementing `read(source) -> IR` and `write(IR) -> target`. The IR captures the common denominator across all three formats.
+All conversions go through a common IR. Adding a new tool means implementing `read(source) -> IR` and `write(IR) -> target`.
 
 ```rust
 struct ConvertedSession {
-    /// Original source identifier (UUID, session ID, or file path)
     source_id: String,
-    /// Which tool this came from
     source_tool: SourceTool,  // Claude | Opencode | Pi
-    /// Session title (from ai-title, session.title, or first message)
     title: String,
-    /// Working directory / project path
     project_dir: PathBuf,
-    /// Ordered list of conversation messages
     messages: Vec<ConvertedMessage>,
-    /// Model used (if known)
     model: Option<String>,
-    /// Provider (if known)
     provider: Option<String>,
-    /// Aggregate token usage
     tokens: Option<TokenUsage>,
 }
 
 struct ConvertedMessage {
-    /// Role: User, Assistant, ToolResult
-    role: MessageRole,
-    /// Timestamp (epoch milliseconds)
+    role: MessageRole,          // User, Assistant, ToolResult
     timestamp_ms: u64,
-    /// Content blocks in order
     content: Vec<ContentBlock>,
-    /// For tool results: which tool call this responds to
+    // For tool results only:
     tool_call_id: Option<String>,
-    /// For tool results: tool name
     tool_name: Option<String>,
-    /// For tool results: whether it errored
     is_error: bool,
 }
 
-enum MessageRole {
-    User,
-    Assistant,
-    ToolResult,
-}
+enum MessageRole { User, Assistant, ToolResult }
 
 enum ContentBlock {
     Text { text: String },
@@ -370,7 +439,7 @@ enum ContentBlock {
         is_error: bool,
     },
     // Thinking is intentionally omitted from the IR;
-    // it's Claude-specific and not displayable in other tools
+    // it's tool-specific and not universally displayable
 }
 
 struct TokenUsage {
@@ -381,241 +450,216 @@ struct TokenUsage {
     reasoning: u64,
 }
 
-enum SourceTool {
-    Claude,
-    Opencode,
-    Pi,
-}
+enum SourceTool { Claude, Opencode, Pi }
 ```
 
-**Linearization:** The IR `messages` Vec is a flat chronological list. Claude sessions can have tree structures (branching via `parentUuid`) and sidechains (`isSidechain: true`). When reading Claude sessions into the IR:
+**Linearization:** The IR `messages` Vec is a flat chronological list.
 
-1. Filter out entries with `isSidechain: true` (branch experiments, not the main conversation)
-2. Filter out non-conversation entries (mode, system, attachment, bridge-session, permission-mode, last-prompt)
-3. Sort remaining entries by timestamp
-4. The result is a linear sequence of user/assistant/tool-result messages
+Claude sessions are a tree (branching via `parentUuid`, sidechains via `isSidechain`). Additionally, each content block is a separate entry. When reading Claude into the IR:
 
-When writing from the IR to a target format:
-- **opencode:** Each assistant message's `data.parentID` points to the immediately preceding user message's ID (simple linear chain)
-- **pi:** Each entry's `parentId` points to the previous entry's `id` (linear chain)
-- **Claude:** Generate `uuid`/`parentUuid` as a linear chain (each entry points to the previous one)
+1. Filter out entries with `isSidechain: true`
+2. Filter out non-conversation entries (all types except `user` and `assistant`)
+3. Sort remaining by timestamp
+4. **Merge consecutive assistant entries** into a single IR message when they share the same logical turn (consecutive assistant entries between user entries). This reconstructs multi-block messages from Claude's one-block-per-entry storage.
+5. Convert `type: "user"` entries with `tool_result` content blocks into `MessageRole::ToolResult` IR messages
 
-The tree structure is a Claude internal detail for conversation branching. The IR intentionally does not model it; all targets expect linear conversations.
+When writing to target format:
+- **opencode v2:** Messages ordered by `seq`. Each assistant message gets one `session_message` row with all content blocks in the `data.content` array.
+- **pi:** Each entry's `parentId` points to the previous entry's `id`
+- **Claude:** Each content block becomes its own entry, linked via `uuid`/`parentUuid`
 
-**Tool name normalization:** The IR stores tool names in lowercase. Readers normalize on ingest; writers capitalize per target conventions.
+**Tool name normalization:** The IR stores tool names in lowercase. Readers normalize on ingest; writers map per target conventions.
 
-| Canonical (IR) | Claude | opencode | pi |
-|----------------|--------|----------|----|
-| `bash` | `Bash` | `bash` | `bash` |
+| Canonical (IR) | Claude | opencode v2 | pi |
+|----------------|--------|-------------|----|
+| `bash` | `Bash` | `shell` | `bash` |
 | `read` | `Read` | `read` | `read` |
 | `write` | `Write` | `write` | `write` |
 | `edit` | `Edit` | `edit` | `edit` |
 | `grep` | `Grep` | `grep` | `grep` |
-| `webfetch` | `WebFetch` | `fetch` | `fetch` |
-| `agent` | `Agent` | `task` | `task` |
+| `glob` | `Grep` | `glob` | `glob` |
+| `webfetch` | `WebFetch` | `webfetch` | `fetch` |
+| `websearch` | `WebSearch` | `websearch` | - |
+| `agent` | `Agent` | `subagent` | `task` |
+| `question` | `AskUserQuestion` | `question` | - |
 | Other | Original case | lowercase | lowercase |
 
 ## Conversion Mapping
 
-### Claude -> opencode
+### Claude -> opencode v2
 
-| Claude | opencode | Notes |
-|--------|----------|-------|
-| Session file `<uuid>.jsonl` | `session` row + `message` + `part` rows | Create project if needed |
-| `type: "user"` entry | `message` (role:user) + `part` (type:text) | |
-| `type: "assistant"` entry | `message` (role:assistant) + parts for each content block | |
-| `content[type: "text"]` | `part` (type:text) | |
-| `content[type: "tool_use"]` + following tool_result | `part` (type:tool) with state.input + state.output | Merge tool call and result into single part |
-| `content[type: "thinking"]` | Dropped | opencode doesn't store extended thinking |
-| `type: "ai-title"` | `session.title` | |
-| `message.usage` | `session.tokens_*` fields (aggregated) | Sum across messages |
-| `message.model` | `session.model` JSON | Map to opencode format |
-| `uuid`/`parentUuid` tree | `message.data.parentID` | Flatten tree to linear sequence |
-| Metadata entries (mode, system, etc.) | Dropped | |
+| Claude | opencode v2 | Notes |
+|--------|-------------|-------|
+| Session file `<uuid>.jsonl` | `session_v2` row + `session_message` rows | Create project if needed |
+| `type: "user"` (plain text) | `session_message` (type:user) | `data.text` field |
+| `type: "user"` (tool_result blocks) | Merged into preceding assistant's tool state | Tool output goes into `state.content` |
+| Consecutive `type: "assistant"` entries | Single `session_message` (type:assistant) | Merge blocks into `data.content` array |
+| `content[type: "text"]` | Content block `{type: "text", text}` | |
+| `content[type: "tool_use"]` + tool_result | Content block `{type: "tool", name, id, state: {input, content, status}}` | Merge call + result |
+| `content[type: "thinking"]` | Dropped | opencode v2 uses "reasoning" but from its own provider |
+| `type: "ai-title"` | `session_v2.title` | |
+| `message.usage` | `session_v2.tokens_*` (aggregated) | Sum across all assistant entries |
+| `message.model` | `session_v2.model` JSON | Map to `{id, providerID, variant}` |
+| All other entry types | Dropped | |
 
-**Tool name mapping:** Handled by the IR normalization table above.
+**ID generation:** opencode v2 uses prefixed IDs:
+- Session: `ses_<random>` (base62-like characters after prefix)
+- Message: `msg_<random>` (same pattern)
+- Session slug: adjective-noun combo (e.g. `clever-otter`). Generate from a small word list.
 
-**ID generation:** opencode uses prefixed IDs. Generate them as:
-- Session: `ses_<random-hex>` (use a UUID or timestamp-based scheme)
-- Message: `msg_<random-hex>`
-- Part: `prt_<random-hex>`
+**Project resolution:** Look up project by worktree path in the `project` table. Claude's `-Users-alkj-code-github-clync` decodes to `/Users/alkj/code/github/clync`. If no project row exists, create one with `id` as random 40-char hex (not SHA1 of path; opencode uses random IDs), `sandboxes = "[]"`, `time_created`/`time_updated` = now.
 
-**Project resolution:** Look up the project by worktree path in the `project` table. The encoded Claude project dir (e.g. `-Users-alkj-code-github-clync`) decodes to `/Users/alkj/code/github/clync`. If no project row exists, create one with `id = sha1(worktree)`.
+**Message ordering:** `session_message` has an explicit `seq` column (unique per session). Assign sequential integers starting from 1.
 
-### opencode -> Claude
+### opencode v2 -> Claude
 
-| opencode | Claude | Notes |
-|----------|--------|-------|
-| `session` row | Session JSONL file | Create in `~/.claude/projects/<encoded-dir>/` |
-| `message` (role:user) + `part` (type:text) | `type: "user"` entry | |
-| `message` (role:assistant) + `part` (type:text) | `type: "assistant"` entry with content array | |
-| `part` (type:tool) | `content[type: "tool_use"]` + separate `tool_result` entry | Split state into call + result |
-| `part` (type:step-start/step-finish) | Dropped | |
-| `session.title` | `type: "ai-title"` entry | |
-| `session.model` | `message.model` on each assistant entry | |
-| `session.tokens_*` | Dropped (Claude doesn't aggregate) | |
-| `message.data.parentID` | `uuid`/`parentUuid` chain | Generate UUIDs for each entry |
+| opencode v2 | Claude | Notes |
+|-------------|--------|-------|
+| `session_v2` row | Session JSONL file | Create in `~/.claude/projects/<encoded-dir>/` |
+| `session_message` (type:user) | `type: "user"` entry | `data.text` -> `message.content` string |
+| `session_message` (type:assistant) text blocks | `type: "assistant"` entry (one per block) | Split content array |
+| Assistant tool block | `type: "assistant"` (tool_use) + `type: "user"` (tool_result) | Split state into call + result entries |
+| `session_v2.title` | `type: "ai-title"` entry | |
+| `session_v2.model` | `message.model` on each assistant entry | |
+| idle, synthetic, system, compaction, model-switched | Dropped | |
 
-**Tool name mapping:** Handled by the IR normalization table above.
+**UUID generation:** Generate UUIDv4 for each entry's `uuid`, maintaining the `parentUuid` chain.
 
-**UUID generation:** Claude uses UUIDv4 for `uuid` fields. Generate fresh ones, maintaining the parent chain.
-
-**Project dir encoding:** Convert the opencode `session.directory` path to Claude's encoded format: `/Users/alkj/code/github/clync` -> `-Users-alkj-code-github-clync` (replace `/` with `-`).
+**Project dir encoding:** `/Users/alkj/code/github/clync` -> `-Users-alkj-code-github-clync`
 
 ### pi conversions
 
-Since pi and Claude are both JSONL with similar structure, pi conversions are the simplest.
+**pi -> IR:** Parse JSONL. `session` entry -> metadata. `message` entries -> IR messages by `message.role` (user, assistant, toolResult). Tool calls: `toolCall` blocks with `arguments` field map to `ToolCall` with `input`. Content is always an array. `model_change`, `thinking_level_change`, `compaction` entries are dropped.
 
-**pi -> IR:** Parse JSONL. `session` entry -> session metadata. `message` entries -> IR messages based on `message.role` (user, assistant, toolResult). Content is always an array. `model_change`, `thinking_level_change`, `compaction` entries are dropped.
-
-**IR -> pi:** Write JSONL. Session header first, then messages in order. Generate short hex IDs for `id`/`parentId` chain. Content always as arrays. Tool results as separate `role: "toolResult"` messages.
+**IR -> pi:** Write JSONL. Session header first, then messages in order. Generate short hex IDs for `id`/`parentId` chain. Content always as arrays. Tool calls use `toolCall` type with `arguments` field. Tool results as separate messages with `role: "toolResult"`.
 
 **pi project dir encoding:** Double-dash wrapped: `--Users-alkj-code-github-clync--`. Decode: strip leading/trailing `--`, replace `-` with `/`, prepend `/`.
 
 ### Writing to Claude (any source -> Claude)
 
-When writing the IR to a Claude JSONL file, prepend these metadata entries before the conversation messages:
+When writing the IR to a Claude JSONL file, prepend these metadata entries:
 1. `{"type": "mode", "mode": "normal", "sessionId": "<uuid>"}`
 2. `{"type": "ai-title", "aiTitle": "<session.title>", "sessionId": "<uuid>"}`
 3. `{"type": "clync-provenance", "source": "<source-tool>", "sourceId": "<original-id>", "convertedAt": "<iso-timestamp>"}`
 
-This applies regardless of whether the source is opencode or pi.
+Then for each IR message:
+- **User text:** One `type: "user"` entry with `message.content` as string
+- **Assistant:** One `type: "assistant"` entry **per content block** (text, tool_use). Each entry's `message.content` is an array with exactly one block.
+- **ToolResult:** One `type: "user"` entry with `message.content` as array of `{type: "tool_result", tool_use_id, content, is_error}`
+
+All entries linked via `uuid`/`parentUuid` chain.
 
 ## Implementation Notes
 
 ### Dependencies
-- SQLite access: use the `rusqlite` crate (well-maintained, ~30M downloads)
-- UUID generation: use the `uuid` crate (already a transitive dep via ratatui on the checkout branch)
-- SHA1 for project ID: use `sha1` or derive from the `age` crate's deps
+- SQLite: `rusqlite` crate
+- UUID generation: `uuid` crate
+- SHA1 for project ID: `sha1` crate
 
 ### File structure
-- `src/convert/mod.rs` - public API, CLI dispatch, IR types (`ConvertedSession`, `ConvertedMessage`, etc.)
-- `src/convert/claude.rs` - Claude session reader/writer (JSONL <-> IR)
-- `src/convert/opencode.rs` - opencode session reader/writer (SQLite <-> IR)
-- `src/convert/pi.rs` - pi session reader/writer (JSONL <-> IR)
-- `src/convert/tools.rs` - tool name normalization and mapping between formats
+- `src/convert/mod.rs` - IR types, CLI dispatch
+- `src/convert/claude.rs` - Claude reader/writer (JSONL <-> IR)
+- `src/convert/opencode.rs` - opencode v2 reader/writer (SQLite <-> IR)
+- `src/convert/pi.rs` - pi reader/writer (JSONL <-> IR)
+- `src/convert/tools.rs` - tool name normalization
 
 ### Provenance tracking
 
-Converted sessions include a provenance marker for debugging and to prevent double-conversion.
-
-**In opencode (Claude -> opencode):** Store in the `session.metadata` JSON column (already exists, nullable text):
+**In opencode v2:** `session_v2.metadata` JSON:
 ```json
-{
-  "clync_source": "claude",
-  "clync_source_uuid": "81155ba9-0ba0-422f-9ae1-868de49f162d",
-  "clync_converted_at": "2026-07-10T14:30:00Z"
-}
+{"clync_source": "claude", "clync_source_id": "uuid", "clync_converted_at": "2026-07-10T14:30:00Z"}
 ```
 
-**In Claude JSONL (opencode -> Claude):** Add a custom entry at the start of the file (Claude Code ignores unknown types):
+**In Claude JSONL:** Custom entry (Claude ignores unknown types):
 ```json
-{"type": "clync-provenance", "source": "opencode", "sourceId": "ses_0b42fb309ffe1Q1xG9O7qyeDjK", "convertedAt": "2026-07-10T14:30:00Z"}
+{"type": "clync-provenance", "source": "opencode", "sourceId": "ses_...", "convertedAt": "2026-07-10T14:30:00Z"}
 ```
 
-**Usage:**
-- Before converting, check if the target already has a provenance marker for this source session. If so, skip unless `--force` is passed.
-- The `--list` command should show `[converted]` next to sessions that came from conversion.
+**In pi JSONL:** Custom entry (pi ignores unknown types):
+```json
+{"type": "clync-provenance", "source": "claude", "sourceId": "uuid", "convertedAt": "2026-07-10T14:30:00Z"}
+```
+
+Before converting, check target for existing provenance. Skip unless `--force`.
 
 ### Error handling
-- Skip entries that can't be parsed (warn, don't fail)
-- If the target session already exists, skip unless `--force` is passed
+- Skip unparseable entries (warn, don't fail)
+- Skip if target session already exists (unless `--force`)
 - Report: N messages converted, M tool calls mapped, K entries skipped
 
 ### Testing
 
 **Unit tests:**
-- Claude JSONL parsing roundtrip
-- opencode message/part construction
-- Tool name mapping
-- UUID/ID generation
-- Project dir encoding/decoding
+- Claude JSONL parsing (one-block-per-entry, tool_result-in-user)
+- opencode v2 session_message construction
+- Tool name mapping (all directions)
+- Project dir encoding/decoding (Claude and pi styles)
+- Assistant entry merging (Claude's split entries -> single IR message)
+- Assistant entry splitting (IR multi-block -> Claude one-per-entry)
 
 **E2e tests:**
-- Write a Claude session JSONL manually, convert to opencode, verify SQLite content
-- Write opencode SQLite rows, convert to Claude, verify JSONL content
-- Roundtrip: Claude -> opencode -> Claude, verify messages match
+- Claude -> opencode v2: write JSONL, convert, verify SQLite
+- opencode v2 -> Claude: insert SQLite rows, convert, verify JSONL
+- Roundtrip: Claude -> opencode -> Claude, verify message content matches
+- pi -> Claude: write JSONL, convert, verify JSONL
 
 **Manual testing:**
-- Convert a real Claude session, open opencode, verify it shows up and is browsable
+- Convert a real Claude session, open in opencode, verify browsable
 - Convert an opencode session, verify Claude Code can read it
-- Test with sessions containing tool calls (Bash, Read, Write)
+- Sessions with tool calls (Bash/shell, Read/read, Write/write)
 
 ### What's intentionally lossy
 
 | Lost in Claude -> opencode | Reason |
 |---|---|
-| Extended thinking content | opencode doesn't display it |
-| Hook/system entries | Claude-specific infrastructure |
-| Permission mode | Claude-specific |
-| Bridge session linking | Claude cloud feature |
+| Extended thinking content | opencode uses its own reasoning format |
+| Hook/system/attachment entries | Claude-specific |
+| Permission mode, bridge-session | Claude-specific |
 | Thinking signatures | Cryptographic verification, Claude-specific |
-| Sidechain messages | opencode has no equivalent |
+| Sidechain messages | No equivalent |
+| file-history, pr-link, queue-operation | Claude-specific tracking |
 
 | Lost in opencode -> Claude | Reason |
 |---|---|
-| Step-start/step-finish markers | Claude has no equivalent |
-| Per-step token counts | Claude tracks differently |
+| idle/synthetic/system/compaction messages | opencode-specific |
+| model-switched events | opencode-specific |
+| Git snapshots (start/end SHA) | No equivalent |
+| Workspace/agent metadata | Different agent model |
 | Session-level cost aggregation | Claude doesn't aggregate |
-| Git snapshots in steps | Claude doesn't snapshot |
-| Workspace/agent metadata | Claude uses different agent model |
+| Tool state.metadata (preview, display) | Claude uses different display model |
 
 | Lost in pi -> Claude/opencode | Reason |
 |---|---|
-| Compaction summaries | Internal context optimization, not conversation content |
-| Model change events | Metadata, not conversation |
-| Thinking level changes | pi-specific setting |
-| API/provider metadata per message | Not standardized across tools |
+| Compaction summaries | Internal optimization |
+| Model change events | Metadata only |
+| Thinking level changes | pi-specific |
+| thinkingSignature field | pi-specific format |
 
 | Lost in Claude/opencode -> pi | Reason |
 |---|---|
-| All Claude metadata (hooks, system, permissions) | Claude-specific |
-| opencode step markers and git snapshots | opencode-specific |
-| Extended thinking content | pi supports it but only from its own provider |
+| All Claude metadata entries | Claude-specific |
+| opencode idle/synthetic/system | opencode-specific |
+| Extended thinking content | pi thinking only from its own provider |
 
-## Clarifications
+### Clarifications
 
-### opencode DB path
-`~/.local/share/opencode/opencode.db` is correct on macOS. opencode uses XDG conventions (`$XDG_DATA_HOME/opencode/`), not the macOS `~/Library/Application Support/` pattern. Respect `$XDG_DATA_HOME` if set, fall back to `~/.local/share/opencode/`.
+**opencode DB path:** `~/.local/share/opencode/opencode.db`. Respects `$XDG_DATA_HOME`.
 
-### Tool call without tool_result
-When a Claude `tool_use` has no corresponding `tool_result` (session interrupted mid-execution), create the opencode `part` with `state.status: "pending"` and empty output. Don't skip it; the call itself is useful history.
+**Tool call without result:** When a Claude `tool_use` has no corresponding `tool_result` (interrupted session), write the opencode tool block with `state.status: "pending"` and empty content.
 
-### Session title fallback
-The `ai-title` entry is not always present in Claude sessions. Fallback chain:
-1. `ai-title` entry if present
-2. First user message content, truncated to 80 chars
-3. `"Untitled session"`
+**Session title fallback:** 1. `ai-title` entry, 2. First user message truncated to 80 chars, 3. `"Untitled session"`.
 
-### ID collision avoidance
-When generating opencode IDs (`ses_`, `msg_`, `prt_` prefixed), collision risk is negligible with 128-bit random values. Still, do a `SELECT EXISTS` check before insert. One query is cheap insurance.
+**opencode ID generation:** Use random IDs. The `ses_` prefix pattern with base62-like characters. `session_message` IDs appear to be plain UUIDs or random strings.
 
-### --project flag
-Accepts the real filesystem path (e.g. `~/code/github/clync` or `/Users/alkj/code/github/clync`). The tool resolves it to the Claude-encoded form (`-Users-alkj-code-github-clync`) internally. Users should never need to know about dash-encoding.
+**Claude assistant merging:** When reading Claude into the IR, consecutive `type: "assistant"` entries (between user entries) belong to the same logical turn. Merge them into one `ConvertedMessage` with multiple `ContentBlock`s. When writing back, split them out again.
 
-### session.metadata column
-The `session.metadata` column already exists in the opencode DB (added via ALTER TABLE after initial creation, which is why it appears at the end of the column list). It's a nullable text column. No migration needed; just write JSON to it.
+**opencode v2 seq numbering:** The `seq` column on `session_message` is unique per session. When writing, assign sequential integers. When reading, order by `seq`.
 
-### Timestamps (Claude -> opencode)
-- `session.time_created`: oldest entry timestamp in the JSONL
-- `session.time_updated`: newest entry timestamp in the JSONL
-- `message.time_created` / `time_updated`: use the entry's own timestamp for both
-- Claude timestamps vary: some entries have `message.timestamp` (epoch ms), some have ISO strings in a `timestamp` field. Normalize to epoch milliseconds for opencode.
+**opencode reasoning blocks:** v2 uses `type: "reasoning"` (not `thinking`). The field is `text` with optional `native.reasoningField`. When converting from Claude thinking to opencode reasoning, drop the content (reasoning content is provider-specific).
 
-### Message ordering in opencode
-opencode orders messages by `(session_id, time_created, id)`, confirmed by the index `message_session_time_created_id_idx`. There is no explicit sequence column on `message`. Insert in chronological order.
-
-### Project name
-When creating a `project` row, use the basename of the worktree path as `name` (e.g. `clync` from `/Users/alkj/code/github/clync`). No need to store the Claude-encoded dir name; the worktree path is sufficient to re-derive it.
-
-### Thinking-only assistant entries
-If a Claude assistant entry contains only `thinking` content (no `text` or `tool_use` blocks), skip it entirely. It would produce zero visible parts in opencode and show as an empty turn. If thinking preceded a `tool_use` in the same content array, the tool_use parts carry the message forward.
-
-### MCP and custom tool names
-Lowercase all tool names when converting Claude -> opencode. opencode uses lowercase (`bash`, `read`, `grep`). MCP tool names like `mcp__chrome-devtools__click` should be lowercased as-is. When converting opencode -> Claude, capitalize the first letter for known tools (`bash` -> `Bash`), pass through unknown names unchanged.
+**opencode shell vs bash:** v2 renamed the command tool from `bash` to `shell`. The IR normalizes to `bash`; the opencode writer maps `bash` -> `shell`.
 
 ### Future extensions
-- Aider, Cursor, Windsurf session formats (add reader/writer per tool, all get every-direction conversion for free)
-- Batch conversion for migration workflows
-- MCP tool for converting sessions on demand
-- `--watch` mode that auto-converts new sessions as they appear
+- Aider, Cursor, Windsurf session formats (add reader/writer per tool)
+- `--watch` mode for auto-conversion of new sessions
+- opencode v1 read support (for legacy sessions)
