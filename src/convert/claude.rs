@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use super::tools::normalize_tool_name;
 use super::{
     ContentBlock, ConvertedMessage, ConvertedSession, MessageRole, SourceTool, TokenUsage,
 };
-use super::tools::normalize_tool_name;
 
 /// Encode a project directory path for Claude's storage format.
 /// `/Users/alkj/code/github/clync` -> `-Users-alkj-code-github-clync`
@@ -51,11 +51,10 @@ pub fn list_sessions(project_filter: Option<&Path>) -> Result<Vec<ClaudeSessionI
         let dir_name = project_entry.file_name().to_string_lossy().to_string();
         let decoded_dir = decode_project_dir(&dir_name);
 
-        if let Some(filter) = project_filter {
-            if decoded_dir != filter {
+        if let Some(filter) = project_filter
+            && decoded_dir != filter {
                 continue;
             }
-        }
 
         for session_entry in fs::read_dir(&project_path)? {
             let session_entry = session_entry?;
@@ -83,7 +82,7 @@ pub fn list_sessions(project_filter: Option<&Path>) -> Result<Vec<ClaudeSessionI
         }
     }
 
-    sessions.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.timestamp_ms));
     Ok(sessions)
 }
 
@@ -106,11 +105,10 @@ fn scan_session_metadata(path: &Path) -> Result<(String, u64)> {
             title = entry["aiTitle"].as_str().unwrap_or("").to_string();
         }
 
-        if let Some(ts) = parse_timestamp(&entry) {
-            if ts < earliest_ts {
+        if let Some(ts) = parse_timestamp(&entry)
+            && ts < earliest_ts {
                 earliest_ts = ts;
             }
-        }
     }
 
     if title.is_empty() {
@@ -139,7 +137,7 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
         .parent()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
-        .map(|n| decode_project_dir(n))
+        .map(decode_project_dir)
         .unwrap_or_default();
 
     let mut title = String::new();
@@ -153,8 +151,9 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
     };
     let mut has_usage = false;
 
-    // Collect conversation entries (user + assistant only)
+    // Collect conversation entries (user + assistant) and stash everything else
     let mut entries: Vec<(u64, Value)> = Vec::new();
+    let mut stash: Vec<Value> = Vec::new();
 
     for line in reader.lines() {
         let line = line?;
@@ -176,8 +175,9 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
 
         let entry_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
-        // Skip sidechains
+        // Stash sidechain entries (preserve them but don't convert)
         if entry.get("isSidechain").and_then(|v| v.as_bool()) == Some(true) {
+            stash.push(entry);
             continue;
         }
 
@@ -187,15 +187,16 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
 
                 // Accumulate token usage from assistant entries
                 if entry_type == "assistant" {
-                    if let Some(usage) = entry
-                        .get("message")
-                        .and_then(|m| m.get("usage"))
-                    {
+                    if let Some(usage) = entry.get("message").and_then(|m| m.get("usage")) {
                         has_usage = true;
-                        total_usage.input +=
-                            usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                        total_usage.output +=
-                            usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                        total_usage.input += usage
+                            .get("input_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        total_usage.output += usage
+                            .get("output_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
                         total_usage.cache_read += usage
                             .get("cache_read_input_tokens")
                             .and_then(|v| v.as_u64())
@@ -218,15 +219,20 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
 
                 entries.push((ts, entry));
             }
-            _ => {} // Skip all other entry types
+            // Stash all non-conversation entries (metadata, hooks, system, etc.)
+            _ => {
+                stash.push(entry);
+            }
         }
     }
 
     // Sort by timestamp
     entries.sort_by_key(|(ts, _)| *ts);
 
-    // Convert entries to IR messages, merging consecutive assistant entries
-    let messages = merge_and_convert_entries(&entries)?;
+    // Convert entries to IR messages, merging consecutive assistant entries.
+    // Thinking blocks that get dropped from the IR go into the stash.
+    let (messages, thinking_stash) = merge_and_convert_entries(&entries)?;
+    stash.extend(thinking_stash);
 
     // Apply title fallback
     if title.is_empty() {
@@ -254,13 +260,20 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
         model,
         provider: Some("anthropic".to_string()),
         tokens: if has_usage { Some(total_usage) } else { None },
+        stash,
     })
 }
 
 /// Merge consecutive assistant entries and convert all entries to IR messages.
-fn merge_and_convert_entries(entries: &[(u64, Value)]) -> Result<Vec<ConvertedMessage>> {
+/// Returns (messages, thinking_stash) where thinking_stash contains raw
+/// assistant entries whose only content was a thinking block.
+fn merge_and_convert_entries(
+    entries: &[(u64, Value)],
+) -> Result<(Vec<ConvertedMessage>, Vec<Value>)> {
     let mut messages: Vec<ConvertedMessage> = Vec::new();
+    let mut thinking_stash: Vec<Value> = Vec::new();
     let mut pending_assistant_blocks: Vec<ContentBlock> = Vec::new();
+    let mut pending_assistant_raws: Vec<Value> = Vec::new();
     let mut pending_assistant_ts: u64 = 0;
 
     for (ts, entry) in entries {
@@ -271,11 +284,16 @@ fn merge_and_convert_entries(entries: &[(u64, Value)]) -> Result<Vec<ConvertedMe
         match entry_type {
             "user" => {
                 // Flush any pending assistant blocks
-                flush_assistant(&mut messages, &mut pending_assistant_blocks, pending_assistant_ts);
+                flush_assistant(
+                    &mut messages,
+                    &mut pending_assistant_blocks,
+                    &mut pending_assistant_raws,
+                    pending_assistant_ts,
+                );
 
                 // Check if this is a tool_result user entry
-                if let Some(Value::Array(blocks)) = content {
-                    if blocks
+                if let Some(Value::Array(blocks)) = content
+                    && blocks
                         .first()
                         .and_then(|b| b.get("type"))
                         .and_then(|t| t.as_str())
@@ -305,11 +323,11 @@ fn merge_and_convert_entries(entries: &[(u64, Value)]) -> Result<Vec<ConvertedMe
                                 tool_call_id: Some(call_id),
                                 tool_name: None,
                                 is_error,
+                                raw: Some(entry.clone()),
                             });
                         }
                         continue;
                     }
-                }
 
                 // Plain text user message
                 let text = match content {
@@ -318,7 +336,9 @@ fn merge_and_convert_entries(entries: &[(u64, Value)]) -> Result<Vec<ConvertedMe
                         .iter()
                         .filter_map(|b| {
                             if b.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                b.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                                b.get("text")
+                                    .and_then(|t| t.as_str())
+                                    .map(|s| s.to_string())
                             } else {
                                 None
                             }
@@ -336,11 +356,15 @@ fn merge_and_convert_entries(entries: &[(u64, Value)]) -> Result<Vec<ConvertedMe
                         tool_call_id: None,
                         tool_name: None,
                         is_error: false,
+                        raw: Some(entry.clone()),
                     });
                 }
             }
             "assistant" => {
-                // Each assistant entry has one content block; accumulate them
+                // Each assistant entry has one content block; accumulate them.
+                // Track whether this entry contributed a visible block.
+                let mut contributed = false;
+
                 if let Some(Value::Array(blocks)) = content {
                     for block in blocks {
                         let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -355,8 +379,8 @@ fn merge_and_convert_entries(entries: &[(u64, Value)]) -> Result<Vec<ConvertedMe
                                     if pending_assistant_blocks.is_empty() {
                                         pending_assistant_ts = *ts;
                                     }
-                                    pending_assistant_blocks
-                                        .push(ContentBlock::Text { text });
+                                    pending_assistant_blocks.push(ContentBlock::Text { text });
+                                    contributed = true;
                                 }
                             }
                             "tool_use" => {
@@ -380,15 +404,24 @@ fn merge_and_convert_entries(entries: &[(u64, Value)]) -> Result<Vec<ConvertedMe
                                     name: normalize_tool_name(&name),
                                     input,
                                 });
+                                contributed = true;
                             }
                             "thinking" => {
-                                // Drop thinking blocks (not universally displayable)
+                                // Thinking blocks don't map to the IR; stash the
+                                // whole assistant entry so it survives the conversion.
+                                thinking_stash.push(entry.clone());
                             }
                             _ => {
-                                // Unknown block type, skip
+                                // Unknown block type; stash to be safe
+                                thinking_stash.push(entry.clone());
                             }
                         }
                     }
+                }
+
+                // Collect raw entries for the merged assistant message
+                if contributed {
+                    pending_assistant_raws.push(entry.clone());
                 }
             }
             _ => {}
@@ -396,26 +429,45 @@ fn merge_and_convert_entries(entries: &[(u64, Value)]) -> Result<Vec<ConvertedMe
     }
 
     // Flush any remaining assistant blocks
-    flush_assistant(&mut messages, &mut pending_assistant_blocks, pending_assistant_ts);
+    flush_assistant(
+        &mut messages,
+        &mut pending_assistant_blocks,
+        &mut pending_assistant_raws,
+        pending_assistant_ts,
+    );
 
-    Ok(messages)
+    Ok((messages, thinking_stash))
 }
 
 fn flush_assistant(
     messages: &mut Vec<ConvertedMessage>,
     blocks: &mut Vec<ContentBlock>,
+    raws: &mut Vec<Value>,
     ts: u64,
 ) {
     if blocks.is_empty() {
+        raws.clear();
         return;
     }
+    // Combine the raw entries from all merged assistant entries into one array
+    let raw = if raws.len() == 1 {
+        Some(raws.drain(..).next().unwrap())
+    } else {
+        let arr: Vec<Value> = std::mem::take(raws);
+        if arr.is_empty() {
+            None
+        } else {
+            Some(Value::Array(arr))
+        }
+    };
     messages.push(ConvertedMessage {
         role: MessageRole::Assistant,
         timestamp_ms: ts,
-        content: blocks.drain(..).collect(),
+        content: std::mem::take(blocks),
         tool_call_id: None,
         tool_name: None,
         is_error: false,
+        raw,
     });
 }
 
@@ -434,11 +486,10 @@ fn extract_tool_result_content(block: &Value) -> String {
 /// Parse a timestamp from a Claude session entry. Returns epoch milliseconds.
 fn parse_timestamp(entry: &Value) -> Option<u64> {
     // Try ISO string timestamp field
-    if let Some(ts_str) = entry.get("timestamp").and_then(|v| v.as_str()) {
-        if let Ok(dt) = ts_str.parse::<chrono::DateTime<chrono::Utc>>() {
+    if let Some(ts_str) = entry.get("timestamp").and_then(|v| v.as_str())
+        && let Ok(dt) = ts_str.parse::<chrono::DateTime<chrono::Utc>>() {
             return Some(dt.timestamp_millis() as u64);
         }
-    }
     // Try message.timestamp (epoch ms)
     if let Some(ts) = entry
         .get("message")
@@ -547,8 +598,7 @@ pub fn write_session(session: &ConvertedSession, output_dir: Option<&Path>) -> R
                             "end_turn",
                         ),
                         ContentBlock::ToolCall { id, name, input } => {
-                            let claude_name =
-                                super::tools::to_claude_tool_name(name);
+                            let claude_name = super::tools::to_claude_tool_name(name);
                             (
                                 serde_json::json!([{
                                     "type": "tool_use",
@@ -626,6 +676,22 @@ pub fn write_session(session: &ConvertedSession, output_dir: Option<&Path>) -> R
                 }
             }
         }
+    }
+
+    // Write the stash (dropped source entries) so a reverse conversion
+    // can reconstruct the original more faithfully. Claude Code ignores
+    // unknown entry types.
+    if !session.stash.is_empty() {
+        write_jsonl_line(
+            &mut file,
+            &serde_json::json!({
+                "type": "clync-stash",
+                "version": 1,
+                "source": session.source_tool.to_string(),
+                "sourceId": session.source_id,
+                "entries": session.stash,
+            }),
+        )?;
     }
 
     // Write last-prompt so Claude Code knows the leaf

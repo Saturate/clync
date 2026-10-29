@@ -3,6 +3,10 @@
 //! All conversions go through a common Intermediate Representation (IR).
 //! Adding a new tool means implementing `read(source) -> IR` and `write(IR) -> target`.
 
+// Provenance functions and the `raw` field on ConvertedMessage are
+// written but not yet wired into the --force duplicate-check path.
+#![allow(dead_code)]
+
 pub mod claude;
 pub mod opencode;
 pub mod pi;
@@ -22,6 +26,11 @@ pub struct ConvertedSession {
     pub model: Option<String>,
     pub provider: Option<String>,
     pub tokens: Option<TokenUsage>,
+    /// Raw source entries that didn't map to the IR (thinking blocks,
+    /// system entries, metadata, step markers, etc.). Carried through
+    /// to the target format so a reverse conversion can reconstruct
+    /// a more faithful original.
+    pub stash: Vec<serde_json::Value>,
 }
 
 /// A single conversation message in the IR.
@@ -33,6 +42,10 @@ pub struct ConvertedMessage {
     pub tool_call_id: Option<String>,
     pub tool_name: Option<String>,
     pub is_error: bool,
+    /// The raw source JSON for this message, preserved so the target
+    /// writer can stash fields that the IR doesn't model (e.g. thinking
+    /// signatures, git snapshots, token breakdowns).
+    pub raw: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,7 +58,9 @@ pub enum MessageRole {
 /// A single content block within a message.
 #[derive(Debug, Clone)]
 pub enum ContentBlock {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     ToolCall {
         id: String,
         name: String, // normalized: lowercase
@@ -101,6 +116,7 @@ impl std::fmt::Display for SourceTool {
 }
 
 /// Entry point for `clync convert`.
+#[allow(clippy::too_many_arguments)]
 pub fn convert_sessions(
     from: &str,
     to: &str,
@@ -111,17 +127,13 @@ pub fn convert_sessions(
     project: Option<&str>,
     force: bool,
 ) -> Result<(), anyhow::Error> {
-    let source: SourceTool = from
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!("{}", e))?;
+    let source: SourceTool = from.parse().map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
     if list {
         return list_sessions_cmd(&source, project);
     }
 
-    let target: SourceTool = to
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!("{}", e))?;
+    let target: SourceTool = to.parse().map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
     if source == target {
         anyhow::bail!("source and target format are the same");
@@ -154,7 +166,7 @@ fn list_sessions_cmd(source: &SourceTool, project: Option<&str>) -> Result<(), a
                 println!("No Claude sessions found.");
                 return Ok(());
             }
-            println!("{:<40} {:<60} {}", "UUID", "Title", "Project");
+            println!("{:<40} {:<60} Project", "UUID", "Title");
             println!("{}", "-".repeat(120));
             for s in &sessions {
                 println!(
@@ -172,7 +184,7 @@ fn list_sessions_cmd(source: &SourceTool, project: Option<&str>) -> Result<(), a
                 println!("No opencode v2 sessions found.");
                 return Ok(());
             }
-            println!("{:<32} {:<60} {}", "ID", "Title", "Directory");
+            println!("{:<32} {:<60} Directory", "ID", "Title");
             println!("{}", "-".repeat(120));
             for s in &sessions {
                 let converted = if s.provenance_source_id.is_some() {
@@ -196,7 +208,7 @@ fn list_sessions_cmd(source: &SourceTool, project: Option<&str>) -> Result<(), a
                 println!("No pi sessions found.");
                 return Ok(());
             }
-            println!("{:<40} {:<60} {}", "ID", "Title", "Project");
+            println!("{:<40} {:<60} Project", "ID", "Title");
             println!("{}", "-".repeat(120));
             for s in &sessions {
                 println!(
@@ -318,10 +330,12 @@ fn convert_one_inner(
         .filter(|b| matches!(b, ContentBlock::ToolCall { .. }))
         .count();
 
+    let stash_count = ir.stash.len();
+
     if dry_run {
         println!(
-            "  [dry-run] {} -> {}: \"{}\" ({} messages, {} tool calls)",
-            source, target, ir.title, msg_count, tool_count
+            "  [dry-run] {} -> {}: \"{}\" ({} messages, {} tool calls, {} stashed)",
+            source, target, ir.title, msg_count, tool_count, stash_count
         );
         return Ok(true);
     }
@@ -336,8 +350,8 @@ fn convert_one_inner(
             format!("{}", path.display())
         }
         SourceTool::Opencode => {
-            let session_id = opencode::write_session(&ir)?;
-            session_id
+            
+            opencode::write_session(&ir)?
         }
         SourceTool::Pi => {
             let path = pi::write_session(&ir, None)?;
@@ -346,8 +360,8 @@ fn convert_one_inner(
     };
 
     println!(
-        "  {} -> {}: \"{}\" ({} messages, {} tool calls) -> {}",
-        source, target, ir.title, msg_count, tool_count, output_desc
+        "  {} -> {}: \"{}\" ({} messages, {} tool calls, {} stashed) -> {}",
+        source, target, ir.title, msg_count, tool_count, stash_count, output_desc
     );
 
     Ok(true)

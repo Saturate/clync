@@ -4,13 +4,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde_json::Value;
 
+use super::tools::{normalize_tool_name, to_opencode_tool_name};
 use super::{
     ContentBlock, ConvertedMessage, ConvertedSession, MessageRole, SourceTool, TokenUsage,
 };
-use super::tools::{normalize_tool_name, to_opencode_tool_name};
 
 /// Open the opencode database.
 fn open_db() -> Result<Connection> {
@@ -63,9 +63,11 @@ pub fn list_sessions(project_filter: Option<&Path>) -> Result<Vec<OpencodeSessio
 fn row_to_info(row: &rusqlite::Row) -> rusqlite::Result<OpencodeSessionInfo> {
     let metadata_str: Option<String> = row.get(4)?;
     let provenance = metadata_str.and_then(|s| {
-        serde_json::from_str::<Value>(&s)
-            .ok()
-            .and_then(|v| v.get("clync_source_id").and_then(|s| s.as_str()).map(|s| s.to_string()))
+        serde_json::from_str::<Value>(&s).ok().and_then(|v| {
+            v.get("clync_source_id")
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string())
+        })
     });
 
     Ok(OpencodeSessionInfo {
@@ -79,13 +81,31 @@ fn row_to_info(row: &rusqlite::Row) -> rusqlite::Result<OpencodeSessionInfo> {
 }
 
 /// Read an opencode v2 session into the IR.
+#[allow(clippy::too_many_lines)]
 pub fn read_session(session_id: &str) -> Result<ConvertedSession> {
     let conn = open_db()?;
 
     // Get session metadata
-    let (title, directory, model_json, tokens_input, tokens_output, tokens_reasoning,
-        tokens_cache_read, tokens_cache_write): (Option<String>, String, Option<String>, i64, i64, i64, i64, i64) =
-        conn.query_row(
+    let (
+        title,
+        directory,
+        model_json,
+        tokens_input,
+        tokens_output,
+        tokens_reasoning,
+        tokens_cache_read,
+        tokens_cache_write,
+    ): (
+        Option<String>,
+        String,
+        Option<String>,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+    ) = conn
+        .query_row(
             "SELECT title, directory, model, tokens_input, tokens_output, tokens_reasoning,
                     tokens_cache_read, tokens_cache_write
              FROM session_v2 WHERE id = ?1",
@@ -110,7 +130,10 @@ pub fn read_session(session_id: &str) -> Result<ConvertedSession> {
         .as_ref()
         .and_then(|s| serde_json::from_str::<Value>(s).ok())
         .map(|v| {
-            let m = v.get("id").and_then(|id| id.as_str()).map(|s| s.to_string());
+            let m = v
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(|s| s.to_string());
             let p = v
                 .get("providerID")
                 .and_then(|p| p.as_str())
@@ -121,23 +144,25 @@ pub fn read_session(session_id: &str) -> Result<ConvertedSession> {
 
     // Read session_message rows ordered by seq
     let mut stmt = conn.prepare(
-        "SELECT type, data, time_created FROM session_message
+        "SELECT type, data, time_created, seq FROM session_message
          WHERE session_id = ?1
          ORDER BY seq",
     )?;
 
     let mut messages = Vec::new();
+    let mut stash: Vec<Value> = Vec::new();
 
     let rows = stmt.query_map(params![session_id], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, u64>(2)?,
+            row.get::<_, i64>(3)?,
         ))
     })?;
 
     for row in rows {
-        let (msg_type, data_str, time_created) = row?;
+        let (msg_type, data_str, time_created, seq) = row?;
         let data: Value = match serde_json::from_str(&data_str) {
             Ok(v) => v,
             Err(e) => {
@@ -161,6 +186,7 @@ pub fn read_session(session_id: &str) -> Result<ConvertedSession> {
                         tool_call_id: None,
                         tool_name: None,
                         is_error: false,
+                        raw: Some(data.clone()),
                     });
                 }
             }
@@ -171,8 +197,7 @@ pub fn read_session(session_id: &str) -> Result<ConvertedSession> {
                     let mut tool_results: Vec<(String, ConvertedMessage)> = Vec::new();
 
                     for block in blocks {
-                        let block_type =
-                            block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
                         match block_type {
                             "text" => {
                                 let text = block
@@ -237,11 +262,18 @@ pub fn read_session(session_id: &str) -> Result<ConvertedSession> {
                                         tool_call_id: Some(tool_id),
                                         tool_name: Some(normalized),
                                         is_error,
+                                        raw: None, // synthetic, derived from tool state
                                     },
                                 ));
                             }
                             "reasoning" => {
-                                // Drop reasoning blocks
+                                // Stash reasoning blocks so they survive a roundtrip
+                                stash.push(serde_json::json!({
+                                    "stash_type": "reasoning_block",
+                                    "seq": seq,
+                                    "time_created": time_created,
+                                    "block": block.clone(),
+                                }));
                             }
                             _ => {}
                         }
@@ -255,6 +287,7 @@ pub fn read_session(session_id: &str) -> Result<ConvertedSession> {
                             tool_call_id: None,
                             tool_name: None,
                             is_error: false,
+                            raw: Some(data.clone()),
                         });
                     }
 
@@ -265,7 +298,14 @@ pub fn read_session(session_id: &str) -> Result<ConvertedSession> {
                 }
             }
             _ => {
-                // Skip idle, synthetic, system, compaction, model-switched
+                // Stash non-convertible message types (idle, synthetic,
+                // system, compaction, model-switched) for lossless roundtrip
+                stash.push(serde_json::json!({
+                    "type": msg_type,
+                    "seq": seq,
+                    "data": data,
+                    "time_created": time_created,
+                }));
             }
         }
     }
@@ -303,6 +343,7 @@ pub fn read_session(session_id: &str) -> Result<ConvertedSession> {
         } else {
             None
         },
+        stash,
     })
 }
 
@@ -357,16 +398,27 @@ pub fn write_session(session: &ConvertedSession) -> Result<String> {
     let (ti, to, tr, tcr, tcw) = session
         .tokens
         .as_ref()
-        .map(|t| (t.input as i64, t.output as i64, t.reasoning as i64, t.cache_read as i64, t.cache_write as i64))
+        .map(|t| {
+            (
+                t.input as i64,
+                t.output as i64,
+                t.reasoning as i64,
+                t.cache_read as i64,
+                t.cache_write as i64,
+            )
+        })
         .unwrap_or((0, 0, 0, 0, 0));
 
-    // Provenance metadata
-    let metadata = serde_json::json!({
+    // Provenance metadata (includes stash for lossless roundtrip)
+    let mut meta = serde_json::json!({
         "clync_source": session.source_tool.to_string(),
         "clync_source_id": session.source_id,
         "clync_converted_at": chrono::Utc::now().to_rfc3339(),
-    })
-    .to_string();
+    });
+    if !session.stash.is_empty() {
+        meta["clync_stash"] = Value::Array(session.stash.clone());
+    }
+    let metadata = meta.to_string();
 
     // Insert session_v2
     conn.execute(
@@ -382,7 +434,11 @@ pub fn write_session(session: &ConvertedSession) -> Result<String> {
             session.title,
             "clync-converted",
             metadata,
-            ti, to, tr, tcr, tcw,
+            ti,
+            to,
+            tr,
+            tcr,
+            tcw,
             model_json,
             now_ms,
             now_ms,
@@ -534,7 +590,14 @@ pub fn write_session(session: &ConvertedSession) -> Result<String> {
     conn.execute(
         "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
          VALUES (?1, ?2, 'idle', ?3, ?4, ?5, ?6)",
-        params![idle_id, session_id, seq, now_ms, now_ms, idle_data.to_string()],
+        params![
+            idle_id,
+            session_id,
+            seq,
+            now_ms,
+            now_ms,
+            idle_data.to_string()
+        ],
     )?;
 
     Ok(session_id)
@@ -591,24 +654,19 @@ pub fn provenance_index() -> Result<HashMap<String, String>> {
     let conn = open_db()?;
 
     let mut index = HashMap::new();
-    let mut stmt = conn.prepare(
-        "SELECT id, metadata FROM session_v2 WHERE metadata IS NOT NULL",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, metadata FROM session_v2 WHERE metadata IS NOT NULL")?;
 
     let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-        ))
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
 
     for row in rows {
         let (id, metadata_str) = row?;
-        if let Ok(meta) = serde_json::from_str::<Value>(&metadata_str) {
-            if let Some(source_id) = meta.get("clync_source_id").and_then(|v| v.as_str()) {
+        if let Ok(meta) = serde_json::from_str::<Value>(&metadata_str)
+            && let Some(source_id) = meta.get("clync_source_id").and_then(|v| v.as_str()) {
                 index.insert(source_id.to_string(), id);
             }
-        }
     }
 
     Ok(index)
@@ -628,14 +686,12 @@ fn generate_opencode_id(prefix: &str) -> String {
 
 fn generate_slug() -> String {
     const ADJECTIVES: &[&str] = &[
-        "amber", "bold", "calm", "dark", "eager", "fair", "glad", "hazy",
-        "keen", "late", "mild", "neat", "odd", "pale", "rare", "safe",
-        "tall", "vast", "warm", "wise",
+        "amber", "bold", "calm", "dark", "eager", "fair", "glad", "hazy", "keen", "late", "mild",
+        "neat", "odd", "pale", "rare", "safe", "tall", "vast", "warm", "wise",
     ];
     const NOUNS: &[&str] = &[
-        "bear", "crab", "deer", "dove", "fawn", "frog", "goat", "hawk",
-        "lion", "lynx", "moth", "newt", "orca", "puma", "rook", "seal",
-        "swan", "toad", "vole", "wolf",
+        "bear", "crab", "deer", "dove", "fawn", "frog", "goat", "hawk", "lion", "lynx", "moth",
+        "newt", "orca", "puma", "rook", "seal", "swan", "toad", "vole", "wolf",
     ];
 
     use std::time::{SystemTime, UNIX_EPOCH};

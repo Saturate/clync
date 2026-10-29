@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use super::tools::{normalize_tool_name, to_pi_tool_name};
 use super::{
     ContentBlock, ConvertedMessage, ConvertedSession, MessageRole, SourceTool, TokenUsage,
 };
-use super::tools::{normalize_tool_name, to_pi_tool_name};
 
 /// Encode a project directory for pi's storage format.
 /// `/Users/alkj/code/github/clync` -> `--Users-alkj-code-github-clync--`
@@ -53,11 +53,10 @@ pub fn list_sessions(project_filter: Option<&Path>) -> Result<Vec<PiSessionInfo>
         let dir_name = project_entry.file_name().to_string_lossy().to_string();
         let decoded_dir = decode_project_dir(&dir_name);
 
-        if let Some(filter) = project_filter {
-            if decoded_dir != filter {
+        if let Some(filter) = project_filter
+            && decoded_dir != filter {
                 continue;
             }
-        }
 
         for session_entry in fs::read_dir(&project_path)? {
             let session_entry = session_entry?;
@@ -66,10 +65,7 @@ pub fn list_sessions(project_filter: Option<&Path>) -> Result<Vec<PiSessionInfo>
                 continue;
             }
 
-            let filename = session_entry
-                .file_name()
-                .to_string_lossy()
-                .to_string();
+            let filename = session_entry.file_name().to_string_lossy().to_string();
 
             // Quick scan for session header
             let info = scan_session_header(&session_path, &decoded_dir);
@@ -84,7 +80,7 @@ pub fn list_sessions(project_filter: Option<&Path>) -> Result<Vec<PiSessionInfo>
         }
     }
 
-    sessions.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.timestamp_ms));
     Ok(sessions)
 }
 
@@ -111,20 +107,18 @@ fn scan_session_header(path: &Path, project_dir: &Path) -> Result<PiSessionInfo>
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            if let Some(ts) = entry.get("timestamp").and_then(|v| v.as_str()) {
-                if let Ok(dt) = ts.parse::<chrono::DateTime<chrono::Utc>>() {
+            if let Some(ts) = entry.get("timestamp").and_then(|v| v.as_str())
+                && let Ok(dt) = ts.parse::<chrono::DateTime<chrono::Utc>>() {
                     timestamp_ms = dt.timestamp_millis() as u64;
                 }
-            }
         }
 
-        if entry_type == "message" && first_user_text.is_empty() {
-            if let Some(role) = entry
+        if entry_type == "message" && first_user_text.is_empty()
+            && let Some(role) = entry
                 .get("message")
                 .and_then(|m| m.get("role"))
                 .and_then(|r| r.as_str())
-            {
-                if role == "user" {
+                && role == "user" {
                     first_user_text = entry
                         .get("message")
                         .and_then(|m| m.get("content"))
@@ -137,8 +131,6 @@ fn scan_session_header(path: &Path, project_dir: &Path) -> Result<PiSessionInfo>
                         .take(80)
                         .collect();
                 }
-            }
-        }
 
         // Stop after we have both header and first user message
         if !session_id.is_empty() && !first_user_text.is_empty() {
@@ -162,6 +154,7 @@ fn scan_session_header(path: &Path, project_dir: &Path) -> Result<PiSessionInfo>
 }
 
 /// Read a pi session JSONL file into the IR.
+#[allow(clippy::too_many_lines)]
 pub fn read_session(path: &Path) -> Result<ConvertedSession> {
     let file = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader = BufReader::new(file);
@@ -179,6 +172,7 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
     };
     let mut has_usage = false;
     let mut messages = Vec::new();
+    let mut stash: Vec<Value> = Vec::new();
 
     for line in reader.lines() {
         let line = line?;
@@ -240,6 +234,7 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
                                 tool_call_id: None,
                                 tool_name: None,
                                 is_error: false,
+                                raw: Some(entry.clone()),
                             });
                         }
                     }
@@ -272,10 +267,8 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
 
                         if let Some(blocks) = content {
                             for block in blocks {
-                                let block_type = block
-                                    .get("type")
-                                    .and_then(|t| t.as_str())
-                                    .unwrap_or("");
+                                let block_type =
+                                    block.get("type").and_then(|t| t.as_str()).unwrap_or("");
                                 match block_type {
                                     "text" => {
                                         let text = block
@@ -299,10 +292,8 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
                                             .unwrap_or("")
                                             .to_string();
                                         // pi uses "arguments" not "input"
-                                        let input = block
-                                            .get("arguments")
-                                            .cloned()
-                                            .unwrap_or(Value::Null);
+                                        let input =
+                                            block.get("arguments").cloned().unwrap_or(Value::Null);
 
                                         ir_blocks.push(ContentBlock::ToolCall {
                                             id,
@@ -311,7 +302,15 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
                                         });
                                     }
                                     "thinking" => {
-                                        // Drop thinking blocks
+                                        // Stash thinking blocks with context
+                                        let msg_id =
+                                            entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                                        stash.push(serde_json::json!({
+                                            "kind": "thinking_block",
+                                            "message_id": msg_id,
+                                            "timestamp_ms": ts,
+                                            "block": block,
+                                        }));
                                     }
                                     _ => {}
                                 }
@@ -326,6 +325,7 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
                                 tool_call_id: None,
                                 tool_name: None,
                                 is_error: false,
+                                raw: Some(entry.clone()),
                             });
                         }
                     }
@@ -338,7 +338,7 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
                         let tool_name = msg
                             .get("toolName")
                             .and_then(|v| v.as_str())
-                            .map(|s| normalize_tool_name(s));
+                            .map(normalize_tool_name);
                         let is_error = msg
                             .get("isError")
                             .and_then(|v| v.as_bool())
@@ -367,13 +367,16 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
                             tool_call_id: Some(call_id),
                             tool_name,
                             is_error,
+                            raw: Some(entry.clone()),
                         });
                     }
                     _ => {}
                 }
             }
             _ => {
-                // Skip model_change, thinking_level_change, compaction, clync-provenance
+                // Stash non-convertible entries (model_change, thinking_level_change,
+                // compaction, clync-provenance, etc.) for lossless round-trips
+                stash.push(entry);
             }
         }
     }
@@ -397,16 +400,16 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
         model,
         provider,
         tokens: if has_usage { Some(total_usage) } else { None },
+        stash,
     })
 }
 
 fn parse_pi_timestamp(entry: &Value) -> u64 {
     // Try ISO string timestamp
-    if let Some(ts_str) = entry.get("timestamp").and_then(|v| v.as_str()) {
-        if let Ok(dt) = ts_str.parse::<chrono::DateTime<chrono::Utc>>() {
+    if let Some(ts_str) = entry.get("timestamp").and_then(|v| v.as_str())
+        && let Ok(dt) = ts_str.parse::<chrono::DateTime<chrono::Utc>>() {
             return dt.timestamp_millis() as u64;
         }
-    }
     // Try message.timestamp (epoch ms)
     if let Some(ts) = entry
         .get("message")
@@ -592,6 +595,20 @@ pub fn write_session(session: &ConvertedSession, output_dir: Option<&Path>) -> R
                 prev_id = entry_id;
             }
         }
+    }
+
+    // Write stash for lossless round-trips (pi ignores unknown entry types)
+    if !session.stash.is_empty() {
+        write_jsonl_line(
+            &mut file,
+            &serde_json::json!({
+                "type": "clync-stash",
+                "version": 1,
+                "source": session.source_tool.to_string(),
+                "sourceId": session.source_id,
+                "entries": session.stash,
+            }),
+        )?;
     }
 
     Ok(output_path)
