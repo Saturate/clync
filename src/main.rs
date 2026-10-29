@@ -247,14 +247,14 @@ enum Cmd {
         #[arg(long)]
         from: String,
 
-        /// Target format: claude, opencode, or pi
-        #[arg(long)]
+        /// Target format: claude, opencode, or pi (not needed with --list)
+        #[arg(long, default_value = "")]
         to: String,
 
         /// Session path or ID to convert
         session: Option<String>,
 
-        /// Convert all sessions (when source is a directory)
+        /// Convert all sessions
         #[arg(long)]
         all: bool,
 
@@ -265,6 +265,14 @@ enum Cmd {
         /// Dry run: show what would be converted without writing
         #[arg(long)]
         dry_run: bool,
+
+        /// Filter to sessions for this project directory
+        #[arg(long, value_name = "DIR")]
+        project: Option<String>,
+
+        /// Overwrite existing converted sessions
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -360,6 +368,17 @@ fn main() -> Result<()> {
             all,
             list,
             dry_run,
-        } => convert::convert_sessions(&from, &to, session.as_deref(), all, list, dry_run),
+            project,
+            force,
+        } => convert::convert_sessions(
+            &from,
+            &to,
+            session.as_deref(),
+            all,
+            list,
+            dry_run,
+            project.as_deref(),
+            force,
+        ),
     }
 }
