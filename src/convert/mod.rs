@@ -1,71 +1,56 @@
-//! Session format conversion between Claude Code, opencode, and pi.
+//! Session format conversion between Claude Code, opencode (v2), and pi.
 //!
 //! All conversions go through a common Intermediate Representation (IR).
 //! Adding a new tool means implementing `read(source) -> IR` and `write(IR) -> target`.
 
+pub mod claude;
+pub mod opencode;
+pub mod pi;
 pub mod tools;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+/// Session metadata after conversion.
 #[derive(Debug, Clone)]
-/// Session metadata after conversion
 pub struct ConvertedSession {
-    /// Original source identifier (UUID, session ID, or file path)
     pub source_id: String,
-    /// Which tool this came from
     pub source_tool: SourceTool,
-    /// Session title (from ai-title, session.title, or first message)
     pub title: String,
-    /// Working directory / project path
     pub project_dir: PathBuf,
-    /// Ordered list of conversation messages
     pub messages: Vec<ConvertedMessage>,
-    /// Model used (if known)
     pub model: Option<String>,
-    /// Provider (if known)
     pub provider: Option<String>,
-    /// Aggregate token usage
     pub tokens: Option<TokenUsage>,
 }
 
+/// A single conversation message in the IR.
 #[derive(Debug, Clone)]
-/// A single conversation message in the IR
 pub struct ConvertedMessage {
-    /// Role: User, Assistant, ToolResult
     pub role: MessageRole,
-    /// Timestamp (epoch milliseconds)
     pub timestamp_ms: u64,
-    /// Content blocks in order
     pub content: Vec<ContentBlock>,
-    /// For tool results: which tool call this responds to
     pub tool_call_id: Option<String>,
-    /// For tool results: tool name
     pub tool_name: Option<String>,
-    /// For tool results: whether it errored
     pub is_error: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-/// Message role in the conversation
 pub enum MessageRole {
     User,
     Assistant,
     ToolResult,
 }
 
+/// A single content block within a message.
 #[derive(Debug, Clone)]
-/// A single content block within a message
 pub enum ContentBlock {
-    /// Plain text content
     Text { text: String },
-    /// An LLM tool call
     ToolCall {
         id: String,
-        name: String,          // normalized: lowercase
+        name: String, // normalized: lowercase
         input: serde_json::Value,
     },
-    /// Result from a tool execution
     ToolResult {
         call_id: String,
         output: String,
@@ -74,7 +59,6 @@ pub enum ContentBlock {
 }
 
 #[derive(Debug, Clone)]
-/// Token usage statistics
 pub struct TokenUsage {
     pub input: u64,
     pub output: u64,
@@ -84,7 +68,6 @@ pub struct TokenUsage {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-/// Source tool identifier
 pub enum SourceTool {
     Claude,
     Opencode,
@@ -97,10 +80,10 @@ impl FromStr for SourceTool {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "claude" => Ok(SourceTool::Claude),
-            "opencode" | "opencoded" => Ok(SourceTool::Opencode),
+            "opencode" => Ok(SourceTool::Opencode),
             "pi" => Ok(SourceTool::Pi),
             _ => Err(format!(
-                "Invalid source tool '{}'. Must be one of: claude, opencode, pi",
+                "unknown format '{}'; must be one of: claude, opencode, pi",
                 s
             )),
         }
@@ -117,47 +100,263 @@ impl std::fmt::Display for SourceTool {
     }
 }
 
-/// Convert a session from one format to another.
+/// Entry point for `clync convert`.
 pub fn convert_sessions(
     from: &str,
     to: &str,
     session_arg: Option<&str>,
     all: bool,
     list: bool,
-    _dry_run: bool,
+    dry_run: bool,
+    project: Option<&str>,
+    force: bool,
 ) -> Result<(), anyhow::Error> {
-    // Parse source and target tools
-    let source_tool: SourceTool = from.parse().map_err(|_| {
-        anyhow::anyhow!(
-            "Invalid source format '{}'. Must be one of: claude, opencode, pi",
-            from
-        )
-    })?;
-
-    let target_tool: SourceTool = to.parse().map_err(|_| {
-        anyhow::anyhow!(
-            "Invalid target format '{}'. Must be one of: claude, opencode, pi",
-            to
-        )
-    })?;
-
-    // TODO: Implement actual conversion logic
-    println!("Converting from {} to {}", source_tool, target_tool);
+    let source: SourceTool = from
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
     if list {
-        println!("Listing available sessions...");
-        // TODO: List sessions based on source tool
-    } else if all {
-        println!("Converting all sessions...");
-        // TODO: Convert all sessions
+        return list_sessions_cmd(&source, project);
+    }
+
+    let target: SourceTool = to
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!("{}", e))?;
+
+    if source == target {
+        anyhow::bail!("source and target format are the same");
+    }
+
+    let project_path = project.map(|p| {
+        let expanded = shellexpand::tilde(p);
+        PathBuf::from(expanded.as_ref())
+    });
+
+    if all {
+        convert_all(&source, &target, project_path.as_deref(), dry_run, force)
     } else if let Some(session) = session_arg {
-        println!(" Converting session: {}", session);
-        // TODO: Convert single session
+        convert_one(&source, &target, session, dry_run, force)
     } else {
-        return Err(anyhow::anyhow!(
-            "Must specify a session ID/path, --all, or --list"
-        ));
+        anyhow::bail!("specify a session ID/path, --all, or --list")
+    }
+}
+
+fn list_sessions_cmd(source: &SourceTool, project: Option<&str>) -> Result<(), anyhow::Error> {
+    let project_path = project.map(|p| {
+        let expanded = shellexpand::tilde(p);
+        PathBuf::from(expanded.as_ref())
+    });
+
+    match source {
+        SourceTool::Claude => {
+            let sessions = claude::list_sessions(project_path.as_deref())?;
+            if sessions.is_empty() {
+                println!("No Claude sessions found.");
+                return Ok(());
+            }
+            println!("{:<40} {:<60} {}", "UUID", "Title", "Project");
+            println!("{}", "-".repeat(120));
+            for s in &sessions {
+                println!(
+                    "{:<40} {:<60} {}",
+                    s.uuid,
+                    truncate(&s.title, 58),
+                    s.project_dir.display()
+                );
+            }
+            println!("\n{} session(s)", sessions.len());
+        }
+        SourceTool::Opencode => {
+            let sessions = opencode::list_sessions(project_path.as_deref())?;
+            if sessions.is_empty() {
+                println!("No opencode v2 sessions found.");
+                return Ok(());
+            }
+            println!("{:<32} {:<60} {}", "ID", "Title", "Directory");
+            println!("{}", "-".repeat(120));
+            for s in &sessions {
+                let converted = if s.provenance_source_id.is_some() {
+                    " [converted]"
+                } else {
+                    ""
+                };
+                println!(
+                    "{:<32} {:<60} {}{}",
+                    s.id,
+                    truncate(&s.title, 58),
+                    s.directory,
+                    converted,
+                );
+            }
+            println!("\n{} session(s)", sessions.len());
+        }
+        SourceTool::Pi => {
+            let sessions = pi::list_sessions(project_path.as_deref())?;
+            if sessions.is_empty() {
+                println!("No pi sessions found.");
+                return Ok(());
+            }
+            println!("{:<40} {:<60} {}", "ID", "Title", "Project");
+            println!("{}", "-".repeat(120));
+            for s in &sessions {
+                println!(
+                    "{:<40} {:<60} {}",
+                    truncate(&s.id, 38),
+                    truncate(&s.title, 58),
+                    s.project_dir.display(),
+                );
+            }
+            println!("\n{} session(s)", sessions.len());
+        }
     }
 
     Ok(())
+}
+
+fn convert_all(
+    source: &SourceTool,
+    target: &SourceTool,
+    project: Option<&Path>,
+    dry_run: bool,
+    force: bool,
+) -> Result<(), anyhow::Error> {
+    let mut converted = 0u64;
+    let mut skipped = 0u64;
+    let mut errors = 0u64;
+
+    match source {
+        SourceTool::Claude => {
+            let sessions = claude::list_sessions(project)?;
+            println!("Found {} Claude session(s)", sessions.len());
+            for s in &sessions {
+                match convert_one_inner(source, target, &s.path, &s.uuid, dry_run, force) {
+                    Ok(true) => converted += 1,
+                    Ok(false) => skipped += 1,
+                    Err(e) => {
+                        eprintln!("  error converting {}: {}", s.uuid, e);
+                        errors += 1;
+                    }
+                }
+            }
+        }
+        SourceTool::Opencode => {
+            let sessions = opencode::list_sessions(project)?;
+            println!("Found {} opencode v2 session(s)", sessions.len());
+            for s in &sessions {
+                match convert_one_inner(source, target, &PathBuf::new(), &s.id, dry_run, force) {
+                    Ok(true) => converted += 1,
+                    Ok(false) => skipped += 1,
+                    Err(e) => {
+                        eprintln!("  error converting {}: {}", s.id, e);
+                        errors += 1;
+                    }
+                }
+            }
+        }
+        SourceTool::Pi => {
+            let sessions = pi::list_sessions(project)?;
+            println!("Found {} pi session(s)", sessions.len());
+            for s in &sessions {
+                match convert_one_inner(source, target, &s.path, &s.id, dry_run, force) {
+                    Ok(true) => converted += 1,
+                    Ok(false) => skipped += 1,
+                    Err(e) => {
+                        eprintln!("  error converting {}: {}", s.id, e);
+                        errors += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    println!(
+        "\nDone: {} converted, {} skipped, {} errors",
+        converted, skipped, errors
+    );
+    Ok(())
+}
+
+fn convert_one(
+    source: &SourceTool,
+    target: &SourceTool,
+    session_arg: &str,
+    dry_run: bool,
+    force: bool,
+) -> Result<(), anyhow::Error> {
+    let path = PathBuf::from(session_arg);
+    match convert_one_inner(source, target, &path, session_arg, dry_run, force) {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            println!("Skipped (already converted). Use --force to overwrite.");
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Returns Ok(true) if converted, Ok(false) if skipped.
+fn convert_one_inner(
+    source: &SourceTool,
+    target: &SourceTool,
+    path: &Path,
+    id: &str,
+    dry_run: bool,
+    _force: bool,
+) -> Result<bool, anyhow::Error> {
+    // Read source into IR
+    let ir = match source {
+        SourceTool::Claude => claude::read_session(path)?,
+        SourceTool::Opencode => opencode::read_session(id)?,
+        SourceTool::Pi => pi::read_session(path)?,
+    };
+
+    let msg_count = ir.messages.len();
+    let tool_count = ir
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter(|b| matches!(b, ContentBlock::ToolCall { .. }))
+        .count();
+
+    if dry_run {
+        println!(
+            "  [dry-run] {} -> {}: \"{}\" ({} messages, {} tool calls)",
+            source, target, ir.title, msg_count, tool_count
+        );
+        return Ok(true);
+    }
+
+    // TODO: Check provenance for duplicates (skip unless force)
+    // This is best done per-target, but for now we just proceed
+
+    // Write to target
+    let output_desc = match target {
+        SourceTool::Claude => {
+            let path = claude::write_session(&ir, None)?;
+            format!("{}", path.display())
+        }
+        SourceTool::Opencode => {
+            let session_id = opencode::write_session(&ir)?;
+            session_id
+        }
+        SourceTool::Pi => {
+            let path = pi::write_session(&ir, None)?;
+            format!("{}", path.display())
+        }
+    };
+
+    println!(
+        "  {} -> {}: \"{}\" ({} messages, {} tool calls) -> {}",
+        source, target, ir.title, msg_count, tool_count, output_desc
+    );
+
+    Ok(true)
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max.saturating_sub(3)])
+    }
 }
