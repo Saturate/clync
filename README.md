@@ -114,9 +114,25 @@ clync push --recompress   # re-push all sessions compressed
 | `list [query]` | Search sessions by project, UUID, or content |
 | `mv [source] <target>` | Move sessions between projects (single or batch) |
 | `checkout` | Clone unmapped project repos referenced in synced sessions |
+| `convert --from <tool> --to <tool>` | Convert sessions between Claude Code, opencode and pi |
 | `log` | Show sync history (machine, operation, counts) |
 | `config` | `show`, `edit`, `path`, `set key value` |
 | `mcp` | Run as stdio MCP server |
+
+## Convert
+
+Move conversations between Claude Code, opencode (v2) and pi, in any direction:
+
+```bash
+clync convert --from claude --list                    # see what's there
+clync convert --from claude --to opencode <uuid>      # one session (path, ID or ID prefix)
+clync convert --from pi --to claude --all --dry-run   # preview everything
+clync convert --from opencode --to pi --all --project ~/code/myrepo
+```
+
+Converted sessions keep the conversation and tool calls of the branch you were last on; prompts you rewound or edited away are left out. Thinking text and compaction summaries the target can't show are kept in a stash inside the converted session. Each conversion records where it came from, so re-running `--all` never duplicates a session or converts one back into the tool it came from.
+
+`--force` replaces an earlier conversion with a fresh one. Anything you added to that converted session in the target tool since is lost, so use it before continuing the conversation there, not after.
 
 ## Merge
 

@@ -270,7 +270,7 @@ enum Cmd {
         #[arg(long, value_name = "DIR")]
         project: Option<String>,
 
-        /// Overwrite existing converted sessions
+        /// Replace sessions that were already converted into the target
         #[arg(long)]
         force: bool,
     },
@@ -370,15 +370,15 @@ fn main() -> Result<()> {
             dry_run,
             project,
             force,
-        } => convert::convert_sessions(
-            &from,
-            &to,
-            session.as_deref(),
+        } => convert::run(&convert::ConvertArgs {
+            from: &from,
+            to: &to,
+            session: session.as_deref(),
             all,
             list,
             dry_run,
-            project.as_deref(),
+            project: project.as_deref(),
             force,
-        ),
+        }),
     }
 }

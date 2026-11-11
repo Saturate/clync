@@ -20,7 +20,7 @@ pub fn to_claude_tool_name(normalized: &str) -> String {
         "write" => "Write",
         "edit" => "Edit",
         "grep" => "Grep",
-        "glob" => "Grep",
+        "glob" => "Glob",
         "webfetch" => "WebFetch",
         "websearch" => "WebSearch",
         "agent" => "Agent",
@@ -89,6 +89,7 @@ mod tests {
     fn claude_mapping_known_tools() {
         assert_eq!(to_claude_tool_name("bash"), "Bash");
         assert_eq!(to_claude_tool_name("read"), "Read");
+        assert_eq!(to_claude_tool_name("glob"), "Glob");
         assert_eq!(to_claude_tool_name("webfetch"), "WebFetch");
         assert_eq!(to_claude_tool_name("agent"), "Agent");
         assert_eq!(to_claude_tool_name("question"), "AskUserQuestion");

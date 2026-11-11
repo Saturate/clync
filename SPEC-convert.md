@@ -406,13 +406,17 @@ All conversions go through a common IR. Adding a new tool means implementing `re
 struct ConvertedSession {
     source_id: String,
     source_tool: SourceTool,  // Claude | Opencode | Pi
+    origin: Option<Origin>,   // set when the source is itself a clync conversion
     title: String,
     project_dir: PathBuf,
     messages: Vec<ConvertedMessage>,
     model: Option<String>,
     provider: Option<String>,
     tokens: Option<TokenUsage>,
+    stash: Vec<serde_json::Value>,  // source content the IR can't express
 }
+
+struct Origin { tool: SourceTool, id: String }
 
 struct ConvertedMessage {
     role: MessageRole,          // User, Assistant, ToolResult
@@ -421,7 +425,6 @@ struct ConvertedMessage {
     // For tool results only:
     tool_call_id: Option<String>,
     tool_name: Option<String>,
-    is_error: bool,
 }
 
 enum MessageRole { User, Assistant, ToolResult }
@@ -438,8 +441,8 @@ enum ContentBlock {
         output: String,
         is_error: bool,
     },
-    // Thinking is intentionally omitted from the IR;
-    // it's tool-specific and not universally displayable
+    // Thinking goes to the stash as text; signatures only validate
+    // against the provider that issued them
 }
 
 struct TokenUsage {
@@ -458,8 +461,8 @@ enum SourceTool { Claude, Opencode, Pi }
 Claude sessions are a tree (branching via `parentUuid`, sidechains via `isSidechain`). Additionally, each content block is a separate entry. When reading Claude into the IR:
 
 1. Filter out entries with `isSidechain: true`
-2. Filter out non-conversation entries (all types except `user` and `assistant`)
-3. Sort remaining by timestamp
+2. Keep only the live branch Claude resumes (see "Branches" below), in replay order rather than file order
+3. Filter out non-conversation entries (all types except `user` and `assistant`), keeping branch order
 4. **Merge consecutive assistant entries** into a single IR message when they share the same logical turn (consecutive assistant entries between user entries). This reconstructs multi-block messages from Claude's one-block-per-entry storage.
 5. Convert `type: "user"` entries with `tool_result` content blocks into `MessageRole::ToolResult` IR messages
 
@@ -507,7 +510,7 @@ When writing to target format:
 - Message: `msg_<random>` (same pattern)
 - Session slug: adjective-noun combo (e.g. `clever-otter`). Generate from a small word list.
 
-**Project resolution:** Look up project by worktree path in the `project` table. Claude's `-Users-alkj-code-github-clync` decodes to `/Users/alkj/code/github/clync`. If no project row exists, create one with `id` as random 40-char hex (not SHA1 of path; opencode uses random IDs), `sandboxes = "[]"`, `time_created`/`time_updated` = now.
+**Project resolution:** Use the ID opencode itself computes (see "Writer requirements" below), inserting the `project` row if missing. The session `directory` stays the original working directory, which may be a subfolder of the repo.
 
 **Message ordering:** `session_message` has an explicit `seq` column (unique per session). Assign sequential integers starting from 1.
 
@@ -552,110 +555,125 @@ All entries linked via `uuid`/`parentUuid` chain.
 ## Implementation Notes
 
 ### Dependencies
-- SQLite: `rusqlite` crate
+- SQLite: `rusqlite` crate (bundled)
 - UUID generation: `uuid` crate
-- SHA1 for project ID: `sha1` crate
 
 ### File structure
-- `src/convert/mod.rs` - IR types, CLI dispatch
-- `src/convert/claude.rs` - Claude reader/writer (JSONL <-> IR)
-- `src/convert/opencode.rs` - opencode v2 reader/writer (SQLite <-> IR)
-- `src/convert/pi.rs` - pi reader/writer (JSONL <-> IR)
+- `src/convert/mod.rs` - IR types, tool-call pairing, shared helpers
+- `src/convert/cli.rs` - `clync convert`: listing, session lookup, dedupe, read -> write loop
+- `src/convert/jsonl.rs` - JSONL helpers shared by Claude and pi
+- `src/convert/{claude,opencode,pi}/` - per format: `mod.rs` (paths, listing, provenance index), `read.rs`, `write.rs`
 - `src/convert/tools.rs` - tool name normalization
+- `tests/convert_e2e.rs` - converts in an isolated HOME and opens the results with the real tools
 
-### Provenance tracking
+### Provenance and dedupe
 
-**In opencode v2:** `session_v2.metadata` JSON:
+Every converted session records its **origin**: the session it ultimately came from. When the source is itself a clync conversion, its recorded origin is carried forward, so `claude -> pi -> opencode` still points at the original Claude session.
+
+**In opencode v2:** `session_v2.metadata` JSON (and `version = 'clync'`):
 ```json
-{"clync_source": "claude", "clync_source_id": "uuid", "clync_converted_at": "2026-07-10T14:30:00Z"}
+{"clync_source": "claude", "clync_source_id": "uuid", "clync_converted_at": "2026-07-10T14:30:00Z", "clync_stash": [...]}
 ```
 
-**In Claude JSONL:** Custom entry (Claude ignores unknown types):
+**In Claude JSONL:** custom entries near the top (Claude ignores unknown types):
 ```json
 {"type": "clync-provenance", "source": "opencode", "sourceId": "ses_...", "convertedAt": "2026-07-10T14:30:00Z"}
+{"type": "clync-stash", "version": 1, "source": "opencode", "sourceId": "ses_...", "entries": [...]}
 ```
 
-**In pi JSONL:** Custom entry (pi ignores unknown types):
+**In pi JSONL:** pi `custom` entries, which stay in the session tree but out of the model context. They come right after the header so the last message stays the leaf pi resumes from:
 ```json
-{"type": "clync-provenance", "source": "claude", "sourceId": "uuid", "convertedAt": "2026-07-10T14:30:00Z"}
+{"type": "custom", "customType": "clync-provenance", "id": "1a2b3c4d", "parentId": null, "data": {"source": "claude", "sourceId": "uuid", "convertedAt": "..."}}
+{"type": "custom", "customType": "clync-stash", "id": "5e6f7a8b", "parentId": "1a2b3c4d", "data": {"version": 1, "entries": [...]}}
 ```
 
-Before converting, check target for existing provenance. Skip unless `--force`.
+Before writing, the target's existing conversions are indexed by origin. A session is skipped when:
+- its origin is the target tool (converting it back would duplicate the original), or
+- the target already has a conversion of that origin. `--force` deletes that conversion and writes a fresh one.
+
+### Stash
+
+The stash keeps source content the IR can't express, so a future reverse conversion can restore it. It deliberately leaves out bookkeeping that only matters to the source tool:
+
+| Source | Stashed | Dropped |
+|---|---|---|
+| Claude | thinking text (no signature), `summary`, `system` compact_boundary / away_summary, non-text blocks (images) | attachments, file-history, api-request records, hooks, permission/mode, sidechains |
+| opencode | reasoning text, compaction/synthetic/system messages, unknown blocks | idle markers |
+| pi | thinking text (no signature), `compaction`, `branch_summary`, non-clync `custom` entries, other message roles | model and thinking-level changes |
+
+When the source is a conversion, its existing stash is carried over unchanged instead.
+
+### Writer requirements found by opening the output
+
+- **Tool calls and results pair one-to-one.** Unanswered calls get a synthetic error result ("No result recorded"); orphan results are dropped. Claude's API rejects a resumed history with an unanswered `tool_use`, and opencode can't decode an unfinished tool block.
+- **opencode tool state** is decoded strictly by status: `completed` carries `content: [{type: "text", text}]`; `error` carries `error: {type: "tool.execution", message}` and no `content` or `metadata`.
+- **opencode IDs** follow opencode's format: prefix, 12 hex chars of `timestamp_ms * 0x1000 + counter` (bit-inverted for session IDs so newer sort first, low 48 bits only), 14 random base62 chars.
+- **opencode project ID** must be the one opencode computes, or the session won't show up in that project. For a git repo: sha1 of `git-remote:<host>/<path>` for `origin` (host lowercased; leading `/`, trailing `.git` and `/` stripped; `file:` remotes ignored), else the ID cached in `<git common dir>/opencode`, else the root commit. Outside git: sha1 of `directory:<path>`, or an existing row for that path.
+- **opencode `event_sequence`** gets a row at the session's last message `seq`. opencode allocates the next message seq from it, so without it continuing the session collides with the converted rows. `--force` deletes the session's `event`, `event_sequence`, `session_pending`, `session_inbox` and `session_message` rows explicitly.
+- **opencode model reference** is required on every assistant message; sessions without a known model get `{id: "unknown", providerID: "unknown"}`. Claude's `<synthetic>` model label is not treated as a model.
+- **Claude** entries form one `parentUuid` chain starting at `null`, carry `cwd`, and blocks of one assistant turn share `message.id`. The final `last-prompt` points at the last entry and carries `lastPrompt`; the stash sits between the messages and it, so the session picker finds the first prompt in the file's head and `lastPrompt` in its tail.
+- **Claude folder names** replace every UTF-16 unit that isn't an ASCII letter or digit with `-` (`DCC.Frontends` -> `DCC-Frontends`); names over 200 characters are cut to 200 and suffixed with `-` plus the base36 of the absolute Java-style string hash of the path.
+- **pi** folder names are `--<path without leading slash, / -> ->--`; entries need 8-hex `id`s with `parentId: null` on the first. Every assistant message carries a `usage` object (zeroed) and `model`/`provider`: pi's footer sums usage without a guard and crashes the TUI otherwise. A `session_info` entry carries the title for pi's session picker.
+- **Branches.** Claude and pi keep rewound or edited branches in the file, and readers convert only the branch the tool itself resumes.
+  - **pi:** the last entry walked back through `parentId`. v1 files without ids keep every entry.
+  - **Claude** (mirrors Claude Code 2.1's loader, `src/convert/claude/branch.rs`), in one forward pass: a `last-prompt` with a non-empty `leafUuid` sets the checkpoint and `explicit` makes it binding; an explicit `null` means rewound to empty; any later conversation row clears both flags; a `compact_boundary` cancels the checkpoint. A binding checkpoint is the leaf. Otherwise leaves (entries nothing points at) are tried newest timestamp first, and the first whose branch covers the checkpoint wins, because the pointer is written mid-turn and often lands on a parallel-result sibling. Newest timestamp rather than last line, because sessions rewritten by clync's own sync merge are in tree order, so the last line can be a parallel sibling from an earlier turn. A checkpoint that was ever explicit only yields to direct descendants. With no checkpoint the newest leaf is used. The walk follows `parentUuid`, and `logicalParentUuid` across compaction boundaries.
+  - **Result placement:** after pairing, every tool result is moved directly after the assistant message holding its call, for all targets.
+  - **Compaction links** that point forward in the file (seen in real sessions, forming a cycle) continue from the last row before the boundary instead.
+  - **Completing turns:** parallel tool calls are separate entries sharing `message.id` whose results fork the chain, so every block of a turn on the branch and every result answering one of its calls is added, ordered right after that turn. Entries are replayed in branch order, not file order, because Claude sometimes writes a result before its call and rewrites compacted sessions with the boundary first.
+  - **Missing parents** bridge like Claude's chain builder: to the newest entry not already on the chain written at most 5 s before the orphan; past that the chain stops there. Either way a warning is printed.
+  - **Compaction summaries** (`isCompactSummary`) go to the stash, since the full history is converted anyway.
+- **Tool call IDs** are made unique per session and each result answers the earliest open call with its ID, since some sources reuse IDs across turns.
+- **Project directory** comes from the session's own `cwd` (Claude entries, pi header), not from decoding the folder name, which is lossy for paths containing `-`.
+- Writers refuse relative project paths and write atomically (temp file + rename, one SQLite transaction). `--force` writes the new copy first and removes the old one only after that succeeds.
 
 ### Error handling
-- Skip unparseable entries (warn, don't fail)
-- Skip if target session already exists (unless `--force`)
-- Report: N messages converted, M tool calls mapped, K entries skipped
+- Skip unparseable lines (warn, don't fail)
+- Subagent transcripts (`<session>/subagents/*.jsonl`) are rejected; convert the parent session
+- Sessions with no conversation (only bookkeeping entries) are skipped
+- Lines with invalid UTF-8 (a write cut off mid-character) are skipped like other unparseable lines
+- `--all` keeps going past failures and exits non-zero if any session failed
 
 ### Testing
 
-**Unit tests:**
-- Claude JSONL parsing (one-block-per-entry, tool_result-in-user)
-- opencode v2 session_message construction
-- Tool name mapping (all directions)
-- Project dir encoding/decoding (Claude and pi styles)
-- Assistant entry merging (Claude's split entries -> single IR message)
-- Assistant entry splitting (IR multi-block -> Claude one-per-entry)
+**Unit tests** (`src/convert/convert_tests.rs`, `tools.rs`): tool name mapping, pi folder encoding, character-safe truncation, tool-call pairing, opencode ID format and ordering, Claude reader on a fixture (titles, cwd, stash contents, sidechains).
 
-**E2e tests:**
-- Claude -> opencode v2: write JSONL, convert, verify SQLite
-- opencode v2 -> Claude: insert SQLite rows, convert, verify JSONL
-- Roundtrip: Claude -> opencode -> Claude, verify message content matches
-- pi -> Claude: write JSONL, convert, verify JSONL
-
-**Manual testing:**
-- Convert a real Claude session, open in opencode, verify browsable
-- Convert an opencode session, verify Claude Code can read it
-- Sessions with tool calls (Bash/shell, Read/read, Write/write)
+**E2e test** (`tests/convert_e2e.rs`, ignored by default since it needs `opencode` and `pi` on PATH):
+```bash
+cargo test --test convert_e2e -- --ignored
+CLYNC_E2E_CLAUDE=1 cargo test --test convert_e2e -- --ignored   # also resumes in Claude Code (one Haiku call)
+```
+It writes Claude and pi fixtures into a temp HOME and a git repo with an `origin` remote, runs a chain of conversions in every direction, asserts dedupe counts on each step and on a full re-run, checks `--force` replaces instead of duplicating, then opens the results: `opencode session export`/`list` (plus the project ID and `event_sequence` watermark), `pi --export` (asserting pi resolves the last message as the leaf), pi's TUI under a pseudo-terminal, and a structural check of the Claude file.
 
 ### What's intentionally lossy
 
 | Lost in Claude -> opencode | Reason |
 |---|---|
-| Extended thinking content | opencode uses its own reasoning format |
-| Hook/system/attachment entries | Claude-specific |
+| Thinking signatures | Only valid for the provider that issued them |
+| Hook/attachment/file-history/api-request entries | Claude bookkeeping |
 | Permission mode, bridge-session | Claude-specific |
-| Thinking signatures | Cryptographic verification, Claude-specific |
-| Sidechain messages | No equivalent |
-| file-history, pr-link, queue-operation | Claude-specific tracking |
+| Sidechain messages | Subagent transcripts, not the main conversation |
 
 | Lost in opencode -> Claude | Reason |
 |---|---|
-| idle/synthetic/system/compaction messages | opencode-specific |
-| model-switched events | opencode-specific |
+| idle markers, model-switched events | opencode bookkeeping |
 | Git snapshots (start/end SHA) | No equivalent |
 | Workspace/agent metadata | Different agent model |
-| Session-level cost aggregation | Claude doesn't aggregate |
 | Tool state.metadata (preview, display) | Claude uses different display model |
 
 | Lost in pi -> Claude/opencode | Reason |
 |---|---|
-| Compaction summaries | Internal optimization |
-| Model change events | Metadata only |
-| Thinking level changes | pi-specific |
-| thinkingSignature field | pi-specific format |
-
-| Lost in Claude/opencode -> pi | Reason |
-|---|---|
-| All Claude metadata entries | Claude-specific |
-| opencode idle/synthetic/system | opencode-specific |
-| Extended thinking content | pi thinking only from its own provider |
+| Model and thinking-level change events | Session settings, not content |
+| thinkingSignature field | Provider-specific |
 
 ### Clarifications
 
-**opencode DB path:** `~/.local/share/opencode/opencode.db`. Respects `$XDG_DATA_HOME`.
+**opencode DB path:** `~/.local/share/opencode/opencode.db`. Respects `$XDG_DATA_HOME`. clync never creates it; run opencode once first.
 
-**Tool call without result:** When a Claude `tool_use` has no corresponding `tool_result` (interrupted session), write the opencode tool block with `state.status: "pending"` and empty content.
+**Session title fallback:** 1. Claude `custom-title`, 2. `ai-title`, 3. first user message truncated to 80 characters, 4. `"Untitled session"`.
 
-**Session title fallback:** 1. `ai-title` entry, 2. First user message truncated to 80 chars, 3. `"Untitled session"`.
+**Claude assistant merging:** consecutive `type: "assistant"` entries between user entries are one logical turn and become one `ConvertedMessage`. When writing back, they're split into one entry per block with a shared `message.id`.
 
-**opencode ID generation:** Use random IDs. The `ses_` prefix pattern with base62-like characters. `session_message` IDs appear to be plain UUIDs or random strings.
-
-**Claude assistant merging:** When reading Claude into the IR, consecutive `type: "assistant"` entries (between user entries) belong to the same logical turn. Merge them into one `ConvertedMessage` with multiple `ContentBlock`s. When writing back, split them out again.
-
-**opencode v2 seq numbering:** The `seq` column on `session_message` is unique per session. When writing, assign sequential integers. When reading, order by `seq`.
-
-**opencode reasoning blocks:** v2 uses `type: "reasoning"` (not `thinking`). The field is `text` with optional `native.reasoningField`. When converting from Claude thinking to opencode reasoning, drop the content (reasoning content is provider-specific).
+**opencode v2 seq numbering:** `seq` is unique per session. Writers assign sequential integers; readers order by `seq`.
 
 **opencode shell vs bash:** v2 renamed the command tool from `bash` to `shell`. The IR normalizes to `bash`; the opencode writer maps `bash` -> `shell`.
 

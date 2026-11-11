@@ -8,6 +8,14 @@ cargo test
 cargo clippy --all-targets -- -D warnings -W clippy::too_many_lines
 ```
 
+`clync convert` has an end-to-end test that opens converted sessions in the real tools. It needs `opencode` and `pi` on PATH, so CI skips it; run it locally when touching `src/convert/`:
+
+```bash
+cargo test --test convert_e2e -- --ignored
+# also resume the converted session in Claude Code (one small Haiku call)
+CLYNC_E2E_CLAUDE=1 cargo test --test convert_e2e -- --ignored
+```
+
 ## Code guidelines
 
 - File length limit: 600 lines per `.rs` file (CI enforced)
@@ -76,4 +84,5 @@ src/
   scanner.rs       Local session discovery
   merge.rs         UUID-tree session merge
   parser.rs        JSONL session parser
+  convert/         Session conversion between Claude Code, opencode and pi
 ```
