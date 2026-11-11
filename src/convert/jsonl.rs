@@ -81,7 +81,7 @@ pub fn text_blocks(content: Option<&Value>) -> String {
             .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
             .collect::<Vec<_>>()
             .join("\n"),
-        _ => String::new(),
+        _ => String::default(),
     }
 }
 
