@@ -2,6 +2,7 @@ mod checkout_tui;
 mod cmd;
 mod compress;
 mod config;
+mod convert;
 mod crypto;
 mod extras;
 pub(crate) mod fileutil;
@@ -240,6 +241,39 @@ enum Cmd {
     },
     /// Run as MCP server (stdio JSON-RPC)
     Mcp,
+    /// Convert sessions between formats (Claude, opencode, pi)
+    Convert {
+        /// Source format: claude, opencode, or pi
+        #[arg(long)]
+        from: String,
+
+        /// Target format: claude, opencode, or pi (not needed with --list)
+        #[arg(long, default_value = "")]
+        to: String,
+
+        /// Session path or ID to convert
+        session: Option<String>,
+
+        /// Convert all sessions
+        #[arg(long)]
+        all: bool,
+
+        /// List available sessions from the source
+        #[arg(long)]
+        list: bool,
+
+        /// Dry run: show what would be converted without writing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Filter to sessions for this project directory
+        #[arg(long, value_name = "DIR")]
+        project: Option<String>,
+
+        /// Replace sessions that were already converted into the target
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -327,5 +361,24 @@ fn main() -> Result<()> {
             remote,
         } => cmd::checkout::cmd_checkout(list, all, base, path, remote),
         Cmd::Mcp => mcp::run_mcp_server(),
+        Cmd::Convert {
+            from,
+            to,
+            session,
+            all,
+            list,
+            dry_run,
+            project,
+            force,
+        } => convert::run(&convert::ConvertArgs {
+            from: &from,
+            to: &to,
+            session: session.as_deref(),
+            all,
+            list,
+            dry_run,
+            project: project.as_deref(),
+            force,
+        }),
     }
 }
