@@ -235,7 +235,7 @@ impl MessageReader {
 /// `state.error.message` when it failed.
 fn tool_output(state: Option<&Value>) -> String {
     let Some(state) = state else {
-        return String::new();
+        return String::default();
     };
     let content = jsonl::text_blocks(state.get("content"));
     if !content.is_empty() {

@@ -65,12 +65,11 @@ pub fn normalize_remote(url: &str) -> Option<String> {
             return None;
         }
         let rest = rest.strip_prefix("//")?;
-        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-        let authority = &rest[..end];
-        let path_and_more = &rest[end..];
-        let path = &path_and_more[..path_and_more
-            .find(['?', '#'])
-            .unwrap_or(path_and_more.len())];
+        let (authority, path_and_more) = match rest.find(['/', '?', '#']) {
+            Some(i) => rest.split_at(i),
+            None => (rest, ""),
+        };
+        let path = path_and_more.split(['?', '#']).next().unwrap_or_default();
         let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
         let host = if host_port.starts_with('[') {
             &host_port[..host_port.find(']').map_or(host_port.len(), |i| i + 1)]
