@@ -42,23 +42,9 @@ pub fn write_secret_file(path: &Path, content: &str) -> Result<()> {
 #[cfg(windows)]
 fn restrict_to_current_user(path: &Path) -> Result<()> {
     use anyhow::{Context, bail};
-    use std::process::Command;
 
-    // `whoami /user /fo csv /nh` prints `"DOMAIN\user","S-1-5-21-..."`
-    let out = Command::new("whoami")
-        .args(["/user", "/fo", "csv", "/nh"])
-        .output()
-        .context("could not run whoami")?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let sid = stdout
-        .trim()
-        .rsplit(',')
-        .next()
-        .map(|s| s.trim_matches('"'))
-        .filter(|s| s.starts_with("S-"))
-        .context("could not determine current user SID")?;
-
-    let out = Command::new("icacls")
+    let sid = current_user_sid()?;
+    let out = std::process::Command::new("icacls")
         .arg(path)
         .args(["/inheritance:r", "/grant:r", &format!("*{sid}:F")])
         .output()
@@ -70,6 +56,24 @@ fn restrict_to_current_user(path: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn current_user_sid() -> Result<String> {
+    use anyhow::Context;
+
+    // `whoami /user /fo csv /nh` prints `"DOMAIN\user","S-1-5-21-..."`
+    let out = std::process::Command::new("whoami")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .context("could not run whoami")?;
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .rsplit(',')
+        .next()
+        .map(|s| s.trim_matches('"').to_string())
+        .filter(|s| s.starts_with("S-"))
+        .context("could not determine current user SID")
 }
 
 pub fn encrypted_name(name: &str, encrypted: bool) -> String {
@@ -253,17 +257,47 @@ mod tests {
     fn write_secret_file_is_owner_only() {
         let path = secret_test_path("acl");
         write_secret_file(&path, "secret\n").unwrap();
-        let out = std::process::Command::new("icacls")
+        // `icacls /save` writes the DACL as SDDL (UTF-16), which uses SIDs
+        // and so doesn't depend on the OS language
+        let dump = path.with_file_name("acl.txt");
+        let ok = std::process::Command::new("icacls")
             .arg(&path)
-            .output()
+            .arg("/save")
+            .arg(&dump)
+            .status()
             .unwrap();
-        let acl = String::from_utf8_lossy(&out.stdout);
-        // One explicit entry with full control, nothing inherited ("(I)")
+        assert!(ok.success());
+        let raw = std::fs::read(&dump).unwrap();
+        let units: Vec<u16> = raw
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        let sddl = String::from_utf16_lossy(&units);
+        let dacl = sddl.lines().nth(1).unwrap().trim();
+
+        // "D:P" = protected: inheritance from the parent is cut off
+        assert!(dacl.starts_with("D:P"), "DACL not protected: {dacl}");
+        let user = current_user_sid().unwrap();
+        let aces: Vec<&str> = dacl
+            .split(['(', ')'])
+            .filter(|a| a.starts_with("A;"))
+            .collect();
         assert!(
-            !acl.contains("(I)"),
-            "ACL still has inherited entries:\n{acl}"
+            aces.iter().any(|a| a.ends_with(user.as_str())),
+            "user missing: {dacl}"
         );
-        assert_eq!(acl.matches(":(F)").count(), 1, "expected one entry:\n{acl}");
+        for ace in aces {
+            let fields: Vec<&str> = ace.split(';').collect();
+            assert!(!fields[1].contains("ID"), "inherited ACE: {ace}");
+            // An elevated session also gives SYSTEM and Administrators
+            // explicit entries on new files. Like root, they can read any
+            // file anyway. Nobody else (Users, Everyone, ...) may appear.
+            let sid = fields[5];
+            assert!(
+                sid == user || sid == "SY" || sid == "BA",
+                "unexpected ACE {ace} in {dacl}"
+            );
+        }
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 

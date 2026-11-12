@@ -183,7 +183,7 @@ pub fn cmd_config(action: Option<super::ConfigAction>) -> Result<()> {
                 bail!("no config found. Run `clync init` first.");
             }
             let fallback = if cfg!(windows) { "notepad" } else { "vi" };
-            let editor = std::env::var("EDITOR").unwrap_or_else(|_| fallback.into());
+            let editor = std::env::var(EDITOR_VAR).unwrap_or_else(|_| fallback.into());
             std::process::Command::new(&editor)
                 .arg(&path)
                 .status()
@@ -214,6 +214,8 @@ pub fn cmd_config(action: Option<super::ConfigAction>) -> Result<()> {
     }
     Ok(())
 }
+
+const EDITOR_VAR: &str = "EDITOR";
 
 fn set_toml_value(table: &mut toml::Table, key: &str, value: &str) -> Result<()> {
     let parts: Vec<&str> = key.split('.').collect();
