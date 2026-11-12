@@ -6,6 +6,76 @@ use crate::compress;
 use crate::config::Config;
 use crate::crypto::Cipher;
 
+/// Write a file only the current user can read (the age key).
+pub fn write_secret_file(path: &Path, content: &str) -> Result<()> {
+    use std::io::Write;
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?
+    };
+    #[cfg(not(unix))]
+    let mut file = {
+        // Lock the file down while it's still empty so the key never sits
+        // on disk with inherited permissions.
+        let file = std::fs::File::create(path)?;
+        // Fail closed: never write the key into a file others may read
+        #[cfg(windows)]
+        if let Err(e) = restrict_to_current_user(path) {
+            drop(file);
+            std::fs::remove_file(path).ok();
+            anyhow::bail!("could not restrict permissions on {}: {e}", path.display());
+        }
+        file
+    };
+    file.write_all(content.as_bytes())?;
+    Ok(())
+}
+
+/// Replace the file's ACL with a single full-control entry for the current
+/// user, dropping inherited entries (the Windows equivalent of chmod 600).
+#[cfg(windows)]
+fn restrict_to_current_user(path: &Path) -> Result<()> {
+    use anyhow::{Context, bail};
+
+    let sid = current_user_sid()?;
+    let out = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", &format!("*{sid}:F")])
+        .output()
+        .context("could not run icacls")?;
+    if !out.status.success() {
+        bail!(
+            "icacls failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn current_user_sid() -> Result<String> {
+    use anyhow::Context;
+
+    // `whoami /user /fo csv /nh` prints `"DOMAIN\user","S-1-5-21-..."`
+    let out = std::process::Command::new("whoami")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .context("could not run whoami")?;
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .rsplit(',')
+        .next()
+        .map(|s| s.trim_matches('"').to_string())
+        .filter(|s| s.starts_with("S-"))
+        .context("could not determine current user SID")
+}
+
 pub fn encrypted_name(name: &str, encrypted: bool) -> String {
     storage_name(name, encrypted, false)
 }
@@ -24,7 +94,8 @@ pub fn is_encrypted(config: &Config) -> bool {
 }
 
 pub fn is_traversal_safe(s: &str) -> bool {
-    !s.contains('/') && !s.contains('\\') && !s.contains('\0') && s != ".."
+    // ':' would let a name like `C:foo` resolve outside the target dir on Windows
+    !s.contains('/') && !s.contains('\\') && !s.contains(':') && !s.contains('\0') && s != ".."
 }
 
 pub fn is_safe_path_component(s: &str) -> bool {
@@ -149,6 +220,91 @@ pub fn restore_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn secret_test_path(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join("clync-secret-test")
+            .join(format!("{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("key.txt")
+    }
+
+    #[test]
+    fn write_secret_file_writes_content() {
+        let path = secret_test_path("content");
+        write_secret_file(&path, "AGE-SECRET-KEY-1\n").unwrap();
+        write_secret_file(&path, "AGE-SECRET-KEY-2\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "AGE-SECRET-KEY-2\n"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_secret_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = secret_test_path("perms");
+        write_secret_file(&path, "secret\n").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_secret_file_is_owner_only() {
+        let path = secret_test_path("acl");
+        write_secret_file(&path, "secret\n").unwrap();
+        // `icacls /save` writes the DACL as SDDL (UTF-16), which uses SIDs
+        // and so doesn't depend on the OS language
+        let dump = path.with_file_name("acl.txt");
+        let ok = std::process::Command::new("icacls")
+            .arg(&path)
+            .arg("/save")
+            .arg(&dump)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+        let raw = std::fs::read(&dump).unwrap();
+        let units: Vec<u16> = raw
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| u16::from_le_bytes(*b))
+            .collect();
+        let sddl = String::from_utf16_lossy(&units);
+        let dacl = sddl.lines().nth(1).unwrap().trim();
+
+        // "D:P" = protected: inheritance from the parent is cut off
+        assert!(dacl.starts_with("D:P"), "DACL not protected: {dacl}");
+        let user = current_user_sid().unwrap();
+        // SDDL writes well-known accounts as aliases: the built-in
+        // Administrator (RID 500, e.g. CI runners) appears as "LA"
+        let is_user = |sid: &str| sid == user || (sid == "LA" && user.ends_with("-500"));
+        let aces: Vec<&str> = dacl
+            .split(['(', ')'])
+            .filter(|a| a.starts_with("A;"))
+            .collect();
+        assert!(
+            aces.iter().any(|a| is_user(a.rsplit(';').next().unwrap())),
+            "user missing: {dacl}"
+        );
+        for ace in aces {
+            let fields: Vec<&str> = ace.split(';').collect();
+            assert!(!fields[1].contains("ID"), "inherited ACE: {ace}");
+            // An elevated session also gives SYSTEM and Administrators
+            // explicit entries on new files. Like root, they can read any
+            // file anyway. Nobody else (Users, Everyone, ...) may appear.
+            let sid = fields[5];
+            assert!(
+                is_user(sid) || sid == "SY" || sid == "BA",
+                "unexpected ACE {ace} in {dacl}"
+            );
+        }
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
 
     #[test]
     fn encrypted_name_adds_age_extension() {

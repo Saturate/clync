@@ -142,24 +142,18 @@ fn run_loop(
                 match key.code {
                     KeyCode::Enter => state.finish_edit(),
                     KeyCode::Esc => state.cancel_edit(),
-                    KeyCode::Backspace => {
-                        if state.edit_cursor > 0 {
-                            let prev = prev_char_boundary(&state.edit_buffer, state.edit_cursor);
-                            state.edit_buffer.drain(prev..state.edit_cursor);
-                            state.edit_cursor = prev;
-                        }
+                    KeyCode::Backspace if state.edit_cursor > 0 => {
+                        let prev = prev_char_boundary(&state.edit_buffer, state.edit_cursor);
+                        state.edit_buffer.drain(prev..state.edit_cursor);
+                        state.edit_cursor = prev;
                     }
-                    KeyCode::Left => {
-                        if state.edit_cursor > 0 {
-                            state.edit_cursor =
-                                prev_char_boundary(&state.edit_buffer, state.edit_cursor);
-                        }
+                    KeyCode::Left if state.edit_cursor > 0 => {
+                        state.edit_cursor =
+                            prev_char_boundary(&state.edit_buffer, state.edit_cursor);
                     }
-                    KeyCode::Right => {
-                        if state.edit_cursor < state.edit_buffer.len() {
-                            state.edit_cursor =
-                                next_char_boundary(&state.edit_buffer, state.edit_cursor);
-                        }
+                    KeyCode::Right if state.edit_cursor < state.edit_buffer.len() => {
+                        state.edit_cursor =
+                            next_char_boundary(&state.edit_buffer, state.edit_cursor);
                     }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         return Ok(Vec::new());
@@ -178,17 +172,13 @@ fn run_loop(
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     return Ok(Vec::new());
                 }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if state.cursor > 0 {
-                        state.cursor -= 1;
-                        state.list_state.select(Some(state.cursor));
-                    }
+                KeyCode::Up | KeyCode::Char('k') if state.cursor > 0 => {
+                    state.cursor -= 1;
+                    state.list_state.select(Some(state.cursor));
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if state.cursor + 1 < state.items.len() {
-                        state.cursor += 1;
-                        state.list_state.select(Some(state.cursor));
-                    }
+                KeyCode::Down | KeyCode::Char('j') if state.cursor + 1 < state.items.len() => {
+                    state.cursor += 1;
+                    state.list_state.select(Some(state.cursor));
                 }
                 KeyCode::Char(' ') => state.toggle_current(),
                 KeyCode::Char('e') => state.start_edit(),
