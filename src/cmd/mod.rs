@@ -343,7 +343,7 @@ fn mv_single_session(
             );
         }
         let home = config::home_dir()
-            .map(|h| h.to_string_lossy().replace('/', "-"))
+            .map(|h| crate::manifest::encode_project_path(&h.to_string_lossy()))
             .unwrap_or_default();
         let home_prefix = format!("{}-", home.trim_start_matches('-'));
         let local = matches.iter().find(|s| {
@@ -364,7 +364,7 @@ fn mv_single_session(
     };
 
     let target_path = config::expand_path(&PathBuf::from(target));
-    let encoded = target_path.to_string_lossy().replace('/', "-");
+    let encoded = crate::manifest::encode_project_path(&target_path.to_string_lossy());
     let target_dir = projects_dir.join(&encoded);
 
     move_session(session, &target_dir, &encoded, projects_dir)
@@ -377,7 +377,7 @@ fn mv_by_project(
     projects_dir: &std::path::Path,
 ) -> Result<()> {
     let source_path = config::expand_path(&PathBuf::from(source));
-    let source_encoded = source_path.to_string_lossy().replace('/', "-");
+    let source_encoded = crate::manifest::encode_project_path(&source_path.to_string_lossy());
 
     let matching: Vec<_> = sessions
         .iter()
@@ -389,7 +389,7 @@ fn mv_by_project(
     }
 
     let target_path = config::expand_path(&PathBuf::from(target));
-    let target_encoded = target_path.to_string_lossy().replace('/', "-");
+    let target_encoded = crate::manifest::encode_project_path(&target_path.to_string_lossy());
     let target_dir = projects_dir.join(&target_encoded);
 
     let count = matching.len();

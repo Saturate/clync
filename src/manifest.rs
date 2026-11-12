@@ -35,11 +35,21 @@ pub fn get_machine_id() -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
+/// Encode a filesystem path the way Claude Code names its project dirs:
+/// path separators and the Windows drive colon become '-'.
+/// `/Users/a/code/x` -> `-Users-a-code-x`, `C:\code\x` -> `C--code-x`.
+pub fn encode_project_path(path: &str) -> String {
+    path.replace(['/', '\\', ':'], "-")
+}
+
+fn encoded_home() -> String {
+    crate::config::home_dir()
+        .map(|h| encode_project_path(&h.to_string_lossy()))
+        .unwrap_or_default()
+}
+
 pub fn normalize_project_path(claude_dir_encoded: &str) -> String {
-    let home = dirs::home_dir()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let home_encoded = home.replace('/', "-");
+    let home_encoded = encoded_home();
     let home_encoded = home_encoded.trim_start_matches('-');
 
     let path = claude_dir_encoded.trim_start_matches('-');
@@ -51,9 +61,21 @@ pub fn normalize_project_path(claude_dir_encoded: &str) -> String {
 }
 
 pub fn denormalize_project_path(normalized: &str) -> String {
-    let home = dirs::home_dir()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let home_encoded = home.replace('/', "-");
-    format!("{}-{}", home_encoded, normalized)
+    format!("{}-{}", encoded_home(), normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_unix_path() {
+        assert_eq!(encode_project_path("/Users/a/code/x"), "-Users-a-code-x");
+    }
+
+    #[test]
+    fn encode_windows_path() {
+        assert_eq!(encode_project_path(r"C:\code\clync"), "C--code-clync");
+        assert_eq!(encode_project_path("C:/code/clync"), "C--code-clync");
+    }
 }

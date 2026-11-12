@@ -285,7 +285,7 @@ pub fn derive_clone_path(normalized_remote: &str, clone_base: &Option<PathBuf>) 
 
 fn repo_name_from_remote(normalized_remote: &str) -> &str {
     normalized_remote
-        .rsplit('/')
+        .rsplit(['/', '\\'])
         .next()
         .unwrap_or(normalized_remote)
 }

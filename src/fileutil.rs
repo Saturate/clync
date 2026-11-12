@@ -24,7 +24,8 @@ pub fn is_encrypted(config: &Config) -> bool {
 }
 
 pub fn is_traversal_safe(s: &str) -> bool {
-    !s.contains('/') && !s.contains('\\') && !s.contains('\0') && s != ".."
+    // ':' would let a name like `C:foo` resolve outside the target dir on Windows
+    !s.contains('/') && !s.contains('\\') && !s.contains(':') && !s.contains('\0') && s != ".."
 }
 
 pub fn is_safe_path_component(s: &str) -> bool {

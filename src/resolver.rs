@@ -85,6 +85,11 @@ pub fn resolve_project_dir(
 }
 
 pub fn decode_project_dir(encoded: &str) -> String {
+    // Windows dirs start with a drive letter: `C--code-x` is `C:/code/x`
+    let bytes = encoded.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && &bytes[1..3] == b"--" {
+        return format!("{}:/{}", &encoded[..1], encoded[3..].replace('-', "/"));
+    }
     let path = encoded.replace('-', "/");
     format!("/{}", path.trim_start_matches('/'))
 }
@@ -327,6 +332,11 @@ mod tests {
             normalize_remote("https://GitHub.COM/MyOrg/MyRepo.git"),
             "github.com/myorg/myrepo"
         );
+    }
+
+    #[test]
+    fn decode_project_dir_windows_drive() {
+        assert_eq!(decode_project_dir("C--code-clync"), "C:/code/clync");
     }
 
     #[test]

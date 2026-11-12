@@ -31,9 +31,13 @@ Great for backup, and for people using more than one machine.
 
 ## Install
 
+Works on macOS, Linux and Windows.
+
 ```bash
 cargo install clync
 ```
+
+Prebuilt binaries for all three are attached to each [GitHub release](https://github.com/Saturate/clync/releases).
 
 With S3 support:
 

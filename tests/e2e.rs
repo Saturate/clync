@@ -311,6 +311,11 @@ fn msg(uuid: &str, parent: Option<&str>, ts: u64, role: &str, content: &str) -> 
     )
 }
 
+/// Mirrors how Claude Code names project dirs (separators and drive colon -> '-')
+fn encode_path(p: &std::path::Path) -> String {
+    p.to_string_lossy().replace(['/', '\\', ':'], "-")
+}
+
 fn mode_entry() -> String {
     r#"{"type":"mode","mode":"normal","sessionId":"sess-1"}"#.to_string()
 }
@@ -1923,7 +1928,7 @@ fn mv_batch_by_project_path() {
     a.init();
 
     let source_path = a.home.join("code").join("old-project");
-    let source_encoded = source_path.to_string_lossy().replace('/', "-");
+    let source_encoded = encode_path(&source_path);
 
     a.write_session(
         &source_encoded,
@@ -1953,7 +1958,7 @@ fn mv_batch_by_project_path() {
         "s2 should exist in new project"
     );
 
-    let target_encoded = target_path.to_string_lossy().replace('/', "-");
+    let target_encoded = encode_path(&target_path);
     let s1_path = a.find_session_file("s1").unwrap();
     assert!(
         s1_path.to_string_lossy().contains(&*target_encoded),
@@ -2248,8 +2253,8 @@ fn setup_checkout_scenario(env: &TestEnv, a: &Machine) -> String {
     let patched = manifest_str.replace(
         r#""last_pushed_by":"#,
         &format!(
-            r#""remote_url":"{}","last_pushed_by":"#,
-            project_bare.to_str().unwrap()
+            r#""remote_url":{},"last_pushed_by":"#,
+            serde_json::to_string(project_bare.to_str().unwrap()).unwrap()
         ),
     );
     std::fs::write(&manifest_path, &patched).unwrap();
