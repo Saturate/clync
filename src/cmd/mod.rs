@@ -182,7 +182,8 @@ pub fn cmd_config(action: Option<super::ConfigAction>) -> Result<()> {
             if !path.exists() {
                 bail!("no config found. Run `clync init` first.");
             }
-            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
+            let fallback = if cfg!(windows) { "notepad" } else { "vi" };
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| fallback.into());
             std::process::Command::new(&editor)
                 .arg(&path)
                 .status()

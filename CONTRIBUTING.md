@@ -8,6 +8,8 @@ cargo test
 cargo clippy --all-targets -- -D warnings -W clippy::too_many_lines
 ```
 
+CI runs the tests on Linux, macOS and Windows. Build paths with `Path::join` rather than string concatenation, and don't assume `/` is the only separator.
+
 ## Code guidelines
 
 - File length limit: 600 lines per `.rs` file (CI enforced)
@@ -17,24 +19,20 @@ cargo clippy --all-targets -- -D warnings -W clippy::too_many_lines
 
 ## Changesets
 
-This project uses [cargo-changeset](https://crates.io/crates/cargo-changeset) for release management. Every PR that changes user-facing behavior needs a changeset file.
+This project uses [changesetter](https://crates.io/crates/changesetter) for release management. Every PR needs a changeset file in `.changeset/` (CI runs `changesetter check`):
 
-```bash
-cargo install cargo-changeset
-
-# Add a changeset (interactive)
-cargo changeset add
-
-# Or non-interactive
-cargo changeset add -p clync -b patch -c fixed -m "Description of what changed for users"
+```markdown
+---
+clync: patch
+---
+Fixed memories not syncing between machines
 ```
 
 **Bump types:**
 - `patch` - bug fixes, small improvements
-- `minor` - new features (maps to patch in pre-1.0)
-- `major` - breaking changes (maps to minor in pre-1.0)
-
-**Categories:** `added`, `changed`, `deprecated`, `removed`, `fixed`, `security`
+- `minor` - new features
+- `major` - breaking changes
+- `none` - no release (CI, docs, internal changes)
 
 Write descriptions for users, not developers. "Fixed memories not syncing between machines" is better than "fix: normalize project paths in extras module".
 
@@ -61,6 +59,7 @@ src/
   memories.rs      Memory sync with path normalization
   extras.rs        Settings, commands, skills sync
   fileutil.rs      Shared file helpers (encrypt, restore, sync)
+  gitcmd.rs        `git` command builder (long paths on Windows)
   store/
     mod.rs         Store trait, LocalFs helper, factory
     git.rs         Git storage backend
