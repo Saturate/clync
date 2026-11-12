@@ -205,7 +205,7 @@ Credentials from environment (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) or co
 
 ## Configuration
 
-Config lives at `~/.clync/config.toml` (`%USERPROFILE%\.clync\config.toml` on Windows). Installs that predate 0.4.1 keep using `~/.config/clync/` (or `$XDG_CONFIG_HOME/clync/`). `clync config path` prints the one in use.
+Config lives at `~/.clync/config.toml` (`%USERPROFILE%\.clync\config.toml` on Windows). clync uses the first of these that exists: `~/.clync/config.toml`, then `$XDG_CONFIG_HOME/clync/config.toml` (or `~/.config/clync/config.toml` if `XDG_CONFIG_HOME` isn't set). A new install goes to `$XDG_CONFIG_HOME/clync/` if that variable is set, otherwise `~/.clync/`. `clync config path` prints the one in use.
 
 ```toml
 [sync]
@@ -240,7 +240,7 @@ clync runs natively on Windows (PowerShell, cmd or Git Bash); no WSL needed.
 - **Paths.** `~` means `%USERPROFILE%`, so config and key live in `%USERPROFILE%\.clync\` and sessions are read from `%USERPROFILE%\.claude\`. If `HOME` is set (Git Bash sets it), clync uses that instead.
 - **Project folders.** Claude Code names project folders after their path with every non-alphanumeric character replaced by `-` (`C:\code\app` becomes `C--code-app`). clync uses the same rule on every OS.
 - **Mixing Windows, macOS and Linux.** Projects under your home folder line up across machines automatically (`~/code/app` on a Mac matches `%USERPROFILE%\code\app`). Projects elsewhere, like `C:\code\app`, are matched by their git remote, so clone the project on each machine (`clync checkout` helps).
-- **Key file permissions.** The age key file doesn't inherit its folder's permissions and grants access only to your user account (the Windows equivalent of `chmod 600`). From an elevated prompt, Windows also gives SYSTEM and Administrators access, which, like root, can read any file anyway.
+- **Key file permissions.** The age key file doesn't inherit its folder's permissions and grants access only to your user account (the Windows equivalent of `chmod 600`). From an elevated prompt, Windows also gives SYSTEM and Administrators access, which, like root, can read any file anyway. If the permissions can't be set, clync stops without writing the key.
 - **Long paths.** clync enables `core.longpaths` for its own git calls, so deep skill folders don't hit the 260-character limit.
 - **Password managers.** 1Password (`op`) works as-is. For Bitwarden, install the standalone `bw.exe` (winget, Scoop or Chocolatey); the npm package installs `bw.cmd`, which clync can't launch. `pass` isn't available on Windows.
 - **Editor.** `clync config edit` opens `%EDITOR%`, falling back to Notepad.

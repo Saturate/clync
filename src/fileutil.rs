@@ -24,12 +24,12 @@ pub fn write_secret_file(path: &Path, content: &str) -> Result<()> {
         // Lock the file down while it's still empty so the key never sits
         // on disk with inherited permissions.
         let file = std::fs::File::create(path)?;
+        // Fail closed: never write the key into a file others may read
         #[cfg(windows)]
         if let Err(e) = restrict_to_current_user(path) {
-            eprintln!(
-                "warning: could not restrict permissions on {}: {e}",
-                path.display()
-            );
+            drop(file);
+            std::fs::remove_file(path).ok();
+            anyhow::bail!("could not restrict permissions on {}: {e}", path.display());
         }
         file
     };

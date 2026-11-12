@@ -284,9 +284,10 @@ pub fn derive_clone_path(normalized_remote: &str, clone_base: &Option<PathBuf>) 
 }
 
 fn repo_name_from_remote(normalized_remote: &str) -> &str {
-    normalized_remote
-        .rsplit(['/', '\\'])
-        .next()
+    // Host separator rules: `\` splits on Windows but is a normal char on Unix
+    Path::new(normalized_remote)
+        .file_name()
+        .and_then(|n| n.to_str())
         .unwrap_or(normalized_remote)
 }
 
