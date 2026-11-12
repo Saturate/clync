@@ -2497,13 +2497,14 @@ fn compression_backward_compat_pull() {
 
 #[test]
 fn long_skill_paths_sync() {
-    // Skills can carry deep trees (node_modules). Once the sync repo's own
-    // path is added these exceed Windows' 260-char MAX_PATH in git.
+    // Skills can carry deep trees (bundled assets, templates). Once the
+    // sync repo's own path is added these exceed Windows' 260-char MAX_PATH
+    // in git. (Avoid node_modules here: it is ignored and wouldn't sync.)
     let env = TestEnv::new("long_paths");
     let a = env.machine("a");
     a.init();
 
-    let rel: PathBuf = ["deep-skill", "node_modules", "@types", "node"]
+    let rel: PathBuf = ["deep-skill", "assets", "templates", "report"]
         .iter()
         .chain(std::iter::repeat_n(&"a-fairly-long-directory-name", 8))
         .collect();
