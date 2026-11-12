@@ -311,9 +311,12 @@ fn msg(uuid: &str, parent: Option<&str>, ts: u64, role: &str, content: &str) -> 
     )
 }
 
-/// Mirrors how Claude Code names project dirs (separators and drive colon -> '-')
+/// Mirrors how Claude Code names project dirs (non-alphanumerics -> '-')
 fn encode_path(p: &std::path::Path) -> String {
-    p.to_string_lossy().replace(['/', '\\', ':'], "-")
+    p.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 fn mode_entry() -> String {

@@ -6,6 +6,72 @@ use crate::compress;
 use crate::config::Config;
 use crate::crypto::Cipher;
 
+/// Write a file only the current user can read (the age key).
+pub fn write_secret_file(path: &Path, content: &str) -> Result<()> {
+    use std::io::Write;
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?
+    };
+    #[cfg(not(unix))]
+    let mut file = {
+        // Lock the file down while it's still empty so the key never sits
+        // on disk with inherited permissions.
+        let file = std::fs::File::create(path)?;
+        #[cfg(windows)]
+        if let Err(e) = restrict_to_current_user(path) {
+            eprintln!(
+                "warning: could not restrict permissions on {}: {e}",
+                path.display()
+            );
+        }
+        file
+    };
+    file.write_all(content.as_bytes())?;
+    Ok(())
+}
+
+/// Replace the file's ACL with a single full-control entry for the current
+/// user, dropping inherited entries (the Windows equivalent of chmod 600).
+#[cfg(windows)]
+fn restrict_to_current_user(path: &Path) -> Result<()> {
+    use anyhow::{Context, bail};
+    use std::process::Command;
+
+    // `whoami /user /fo csv /nh` prints `"DOMAIN\user","S-1-5-21-..."`
+    let out = Command::new("whoami")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .context("could not run whoami")?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let sid = stdout
+        .trim()
+        .rsplit(',')
+        .next()
+        .map(|s| s.trim_matches('"'))
+        .filter(|s| s.starts_with("S-"))
+        .context("could not determine current user SID")?;
+
+    let out = Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", &format!("*{sid}:F")])
+        .output()
+        .context("could not run icacls")?;
+    if !out.status.success() {
+        bail!(
+            "icacls failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 pub fn encrypted_name(name: &str, encrypted: bool) -> String {
     storage_name(name, encrypted, false)
 }
@@ -150,6 +216,56 @@ pub fn restore_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn secret_test_path(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join("clync-secret-test")
+            .join(format!("{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("key.txt")
+    }
+
+    #[test]
+    fn write_secret_file_writes_content() {
+        let path = secret_test_path("content");
+        write_secret_file(&path, "AGE-SECRET-KEY-1\n").unwrap();
+        write_secret_file(&path, "AGE-SECRET-KEY-2\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "AGE-SECRET-KEY-2\n"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_secret_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = secret_test_path("perms");
+        write_secret_file(&path, "secret\n").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_secret_file_is_owner_only() {
+        let path = secret_test_path("acl");
+        write_secret_file(&path, "secret\n").unwrap();
+        let out = std::process::Command::new("icacls")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let acl = String::from_utf8_lossy(&out.stdout);
+        // One explicit entry with full control, nothing inherited ("(I)")
+        assert!(
+            !acl.contains("(I)"),
+            "ACL still has inherited entries:\n{acl}"
+        );
+        assert_eq!(acl.matches(":(F)").count(), 1, "expected one entry:\n{acl}");
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
 
     #[test]
     fn encrypted_name_adds_age_extension() {

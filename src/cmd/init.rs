@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::config::{self, Config, EncryptionConfig, StorageConfig, SyncConfig};
 use crate::crypto::Cipher;
+use crate::fileutil::write_secret_file;
 use crate::io::InputSource;
 use crate::scanner::ScanFilter;
 use crate::store::git::GitStore;
@@ -410,26 +411,6 @@ pub(crate) fn prompt_manual_key(
     let key_path = config_dir.join("key.txt");
     write_secret_file(&key_path, &format!("{key}\n"))?;
     Ok(EncryptionConfig::KeyFile { path: key_path })
-}
-
-pub(crate) fn write_secret_file(path: &std::path::Path, content: &str) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        file.write_all(content.as_bytes())?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, content)?;
-    }
-    Ok(())
 }
 
 pub(crate) fn ensure_repo_readme(config: &Config) -> Result<()> {
