@@ -229,7 +229,12 @@ fn set_toml_value(table: &mut toml::Table, key: &str, value: &str) -> Result<()>
             .with_context(|| format!("section '{section}' not found"))?;
     }
 
-    let parsed: toml::Value = if value == "true" {
+    let parsed: toml::Value = if value.trim_start().starts_with('[') {
+        // TOML array, e.g. `sync.ignore '["dist", "!.git"]'`
+        let doc: toml::Table = toml::from_str(&format!("v = {value}"))
+            .with_context(|| format!("invalid array: {value}"))?;
+        doc["v"].clone()
+    } else if value == "true" {
         toml::Value::Boolean(true)
     } else if value == "false" {
         toml::Value::Boolean(false)

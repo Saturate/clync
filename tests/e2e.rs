@@ -2486,3 +2486,81 @@ fn compression_backward_compat_pull() {
         "content should survive pull without compression"
     );
 }
+
+#[test]
+fn skills_skip_dependency_and_managed_dirs() {
+    let env = TestEnv::new("skills_skip");
+    let a = env.machine("a");
+    a.init();
+
+    a.write_skill("mine.md", "my skill");
+    let skills = a.claude_dir().join("skills");
+    for rel in [
+        "tool/node_modules/dep/index.js",
+        "tool/.venv/lib/site.py",
+        "synced/org_user/docx/SKILL.md",
+        ".trash/old/SKILL.md",
+    ] {
+        let path = skills.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "junk").unwrap();
+    }
+    a.push();
+
+    let stored = a.sync_repo.join("extras/skills");
+    for dir in ["tool/node_modules", "tool/.venv", "synced", ".trash"] {
+        assert!(!stored.join(dir).exists(), "{dir} should not be pushed");
+    }
+
+    let b = env.machine("b");
+    b.join();
+    assert_eq!(b.read_file("skills/mine.md"), "my skill");
+    assert!(!b.file_exists("skills/synced"));
+    assert!(!b.file_exists("skills/tool/node_modules"));
+}
+
+#[test]
+fn user_ignore_rules_from_config() {
+    let env = TestEnv::new("user_ignore");
+    let a = env.machine("a");
+    a.init();
+
+    let skills = a.claude_dir().join("skills");
+    for rel in [
+        "tool/SKILL.md",
+        "tool/dist/bundle.js",
+        "tool/node_modules/dep.js",
+    ] {
+        let path = skills.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "x").unwrap();
+    }
+    a.push();
+    let stored = a.sync_repo.join("extras/skills/tool");
+    assert!(stored.join("dist").exists(), "dist syncs by default");
+
+    // Add a rule and re-enable a default: dist is pruned, node_modules pushed
+    a.run_ok(&[
+        "config",
+        "set",
+        "sync.ignore",
+        r#"["dist", "!node_modules"]"#,
+    ]);
+    a.push();
+    assert!(!stored.join("dist").exists(), "dist should be pruned");
+    assert!(
+        stored.join("node_modules").exists(),
+        "node_modules re-enabled"
+    );
+
+    // A joining machine inherits the rules from the repo
+    let b = env.machine("b");
+    b.join();
+    let b_config = std::fs::read_to_string(b.config.join("clync/config.toml")).unwrap();
+    assert!(
+        b_config.contains("!node_modules"),
+        "join seeds ignore: {b_config}"
+    );
+    assert!(b.file_exists("skills/tool/node_modules/dep.js"));
+    assert!(!b.file_exists("skills/tool/dist"));
+}

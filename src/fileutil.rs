@@ -1,10 +1,10 @@
 use anyhow::Result;
 use std::path::Path;
-use walkdir::WalkDir;
 
 use crate::compress;
 use crate::config::Config;
 use crate::crypto::Cipher;
+use crate::ignore::{IgnoreRules, strip_storage_suffix};
 
 pub fn encrypted_name(name: &str, encrypted: bool) -> String {
     storage_name(name, encrypted, false)
@@ -99,6 +99,7 @@ pub fn restore_file(src: &Path, dst: &Path, cipher: &Cipher) -> Result<u32> {
 pub fn sync_directory(
     src_dir: &Path,
     dst_dir: &Path,
+    rules: &IgnoreRules,
     cipher: &Cipher,
     encrypted: bool,
     compressed: bool,
@@ -108,11 +109,9 @@ pub fn sync_directory(
         return Ok(0);
     }
     std::fs::create_dir_all(dst_dir)?;
+    rules.prune(dst_dir)?;
     let mut count = 0u32;
-    for entry in WalkDir::new(src_dir).into_iter().filter_map(|e| e.ok()) {
-        if !entry.file_type().is_file() {
-            continue;
-        }
+    for entry in rules.walk_files(src_dir, false) {
         let rel = entry.path().strip_prefix(src_dir)?;
         let dst = dst_dir.join(storage_name(&rel.to_string_lossy(), encrypted, compressed));
         count += sync_file_if_changed(entry.path(), &dst, cipher, compressed, compression_level)?;
@@ -120,27 +119,25 @@ pub fn sync_directory(
     Ok(count)
 }
 
-pub fn restore_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Result<u32> {
+pub fn restore_directory(
+    src_dir: &Path,
+    dst_dir: &Path,
+    rules: &IgnoreRules,
+    cipher: &Cipher,
+) -> Result<u32> {
     if !src_dir.exists() {
         return Ok(0);
     }
     std::fs::create_dir_all(dst_dir)?;
     let mut count = 0u32;
-    for entry in WalkDir::new(src_dir).into_iter().filter_map(|e| e.ok()) {
-        if !entry.file_type().is_file() {
-            continue;
-        }
+    // Skipping here too keeps junk an older version pushed off other machines
+    for entry in rules.walk_files(src_dir, true) {
         let rel = entry
             .path()
             .strip_prefix(src_dir)?
             .to_string_lossy()
             .to_string();
-        let original_name = rel
-            .strip_suffix(".zst.age")
-            .or_else(|| rel.strip_suffix(".age"))
-            .or_else(|| rel.strip_suffix(".zst"))
-            .unwrap_or(&rel);
-        let dst = dst_dir.join(original_name);
+        let dst = dst_dir.join(strip_storage_suffix(&rel));
         count += restore_file(entry.path(), &dst, cipher)?;
     }
     Ok(count)
@@ -149,6 +146,108 @@ pub fn restore_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use walkdir::WalkDir;
+
+    fn tree(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join("clync-ignore-test")
+            .join(format!("{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        for (rel, body) in [
+            ("my-skill/SKILL.md", "mine"),
+            ("my-skill/node_modules/dep/index.js", "dep"),
+            ("my-skill/scripts/__pycache__/x.pyc", "pyc"),
+            ("my-skill/.git/HEAD", "ref"),
+            ("synced/org_user/docx/SKILL.md", "managed"),
+            (".trash/old/SKILL.md", "deleted"),
+            ("nested/synced/SKILL.md", "only top-level synced is skipped"),
+        ] {
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        dir
+    }
+
+    fn files(root: &Path) -> Vec<String> {
+        let mut out: Vec<String> = WalkDir::new(root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .map(|e| {
+                let rel = e.path().strip_prefix(root).unwrap();
+                rel.to_string_lossy().replace('\\', "/")
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn skip() -> IgnoreRules {
+        IgnoreRules::new(&[], &["synced", ".trash"])
+    }
+
+    #[test]
+    fn sync_directory_skips_ignored_dirs() {
+        let src = tree("push-src");
+        let dst = src.with_file_name(format!("push-dst-{}", std::process::id()));
+        std::fs::remove_dir_all(&dst).ok();
+        sync_directory(&src, &dst, &skip(), &Cipher::Plaintext, false, false, 3).unwrap();
+        assert_eq!(files(&dst), ["my-skill/SKILL.md", "nested/synced/SKILL.md"]);
+        std::fs::remove_dir_all(&src).ok();
+        std::fs::remove_dir_all(&dst).ok();
+    }
+
+    #[test]
+    fn sync_directory_prunes_previously_pushed_junk() {
+        // A store written by an older version that synced everything
+        let dst = tree("prune-dst");
+        let src = dst.with_file_name(format!("prune-src-{}", std::process::id()));
+        std::fs::remove_dir_all(&src).ok();
+        std::fs::create_dir_all(src.join("my-skill")).unwrap();
+        std::fs::write(src.join("my-skill/SKILL.md"), "mine").unwrap();
+        sync_directory(&src, &dst, &skip(), &Cipher::Plaintext, false, false, 3).unwrap();
+        assert_eq!(files(&dst), ["my-skill/SKILL.md", "nested/synced/SKILL.md"]);
+        std::fs::remove_dir_all(&src).ok();
+        std::fs::remove_dir_all(&dst).ok();
+    }
+
+    #[test]
+    fn user_ignore_rules_apply_on_push_and_prune() {
+        let src = tree("user-src");
+        std::fs::write(src.join("my-skill/notes.tmp"), "scratch").unwrap();
+        let dst = src.with_file_name(format!("user-dst-{}", std::process::id()));
+        std::fs::remove_dir_all(&dst).ok();
+        // First push with defaults, then tighten the rules: the stored
+        // copies of newly ignored names must be pruned
+        sync_directory(&src, &dst, &skip(), &Cipher::Plaintext, true, true, 3).unwrap();
+        assert!(files(&dst).contains(&"my-skill/notes.tmp.zst.age".to_string()));
+        let rules = IgnoreRules::new(
+            &["notes.tmp".into(), "nested".into(), "!node_modules".into()],
+            &["synced", ".trash"],
+        );
+        sync_directory(&src, &dst, &rules, &Cipher::Plaintext, true, true, 3).unwrap();
+        assert_eq!(
+            files(&dst),
+            [
+                "my-skill/SKILL.md.zst.age",
+                "my-skill/node_modules/dep/index.js.zst.age",
+            ]
+        );
+        std::fs::remove_dir_all(&src).ok();
+        std::fs::remove_dir_all(&dst).ok();
+    }
+
+    #[test]
+    fn restore_directory_skips_ignored_dirs() {
+        let src = tree("pull-src");
+        let dst = src.with_file_name(format!("pull-dst-{}", std::process::id()));
+        std::fs::remove_dir_all(&dst).ok();
+        restore_directory(&src, &dst, &skip(), &Cipher::Plaintext).unwrap();
+        assert_eq!(files(&dst), ["my-skill/SKILL.md", "nested/synced/SKILL.md"]);
+        std::fs::remove_dir_all(&src).ok();
+        std::fs::remove_dir_all(&dst).ok();
+    }
 
     #[test]
     fn encrypted_name_adds_age_extension() {
