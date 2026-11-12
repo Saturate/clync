@@ -37,6 +37,7 @@ pub fn push_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPushRes
     let enc = is_encrypted(config);
     let comp = config.sync.compression;
     let level = config.sync.compression_level;
+    let rules = crate::ignore::IgnoreRules::new(&config.sync.ignore, &[]);
 
     let projects_dir = claude_dir.join("projects");
     if !projects_dir.exists() {
@@ -56,7 +57,7 @@ pub fn push_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPushRes
         let raw_name = project_entry.file_name().to_string_lossy().to_string();
         let normalized = normalize_project_path(&raw_name);
         let dst_dir = memories_dir.join(&normalized);
-        pushed += sync_directory(&memory_dir, &dst_dir, &[], cipher, enc, comp, level)?;
+        pushed += sync_directory(&memory_dir, &dst_dir, &rules, cipher, enc, comp, level)?;
     }
 
     Ok(MemoriesPushResult { pushed })

@@ -23,6 +23,10 @@ pub struct SyncConfig {
     pub compression: bool,
     #[serde(default = "default_compression_level")]
     pub compression_level: i32,
+    /// Extra file/dir names never synced in skills, commands and memories,
+    /// matched at any depth. `!name` re-enables a built-in default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignore: Vec<String>,
     pub storage: StorageConfig,
 }
 
@@ -320,6 +324,7 @@ mod tests {
                 strict_path_validation: false,
                 compression: true,
                 compression_level: default_compression_level(),
+                ignore: Vec::new(),
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp/repo"),
                     auto_push: true,
@@ -355,6 +360,7 @@ mod tests {
                 strict_path_validation: false,
                 compression: true,
                 compression_level: default_compression_level(),
+                ignore: Vec::new(),
                 storage: StorageConfig::Folder {
                     path: PathBuf::from("/mnt/nas/clync"),
                 },

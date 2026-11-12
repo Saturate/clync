@@ -24,6 +24,7 @@ fn make_config(encrypted: bool) -> Config {
             strict_path_validation: false,
             compression: true,
             compression_level: crate::config::default_compression_level(),
+            ignore: Vec::new(),
             storage: StorageConfig::Git {
                 path: std::path::PathBuf::from("/tmp/fake-store"),
                 auto_push: false,
