@@ -278,12 +278,15 @@ mod tests {
         // "D:P" = protected: inheritance from the parent is cut off
         assert!(dacl.starts_with("D:P"), "DACL not protected: {dacl}");
         let user = current_user_sid().unwrap();
+        // SDDL writes well-known accounts as aliases: the built-in
+        // Administrator (RID 500, e.g. CI runners) appears as "LA"
+        let is_user = |sid: &str| sid == user || (sid == "LA" && user.ends_with("-500"));
         let aces: Vec<&str> = dacl
             .split(['(', ')'])
             .filter(|a| a.starts_with("A;"))
             .collect();
         assert!(
-            aces.iter().any(|a| a.ends_with(user.as_str())),
+            aces.iter().any(|a| is_user(a.rsplit(';').next().unwrap())),
             "user missing: {dacl}"
         );
         for ace in aces {
@@ -294,7 +297,7 @@ mod tests {
             // file anyway. Nobody else (Users, Everyone, ...) may appear.
             let sid = fields[5];
             assert!(
-                sid == user || sid == "SY" || sid == "BA",
+                is_user(sid) || sid == "SY" || sid == "BA",
                 "unexpected ACE {ace} in {dacl}"
             );
         }
