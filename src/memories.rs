@@ -56,7 +56,7 @@ pub fn push_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPushRes
         let raw_name = project_entry.file_name().to_string_lossy().to_string();
         let normalized = normalize_project_path(&raw_name);
         let dst_dir = memories_dir.join(&normalized);
-        pushed += sync_directory(&memory_dir, &dst_dir, cipher, enc, comp, level)?;
+        pushed += sync_directory(&memory_dir, &dst_dir, &[], cipher, enc, comp, level)?;
     }
 
     Ok(MemoriesPushResult { pushed })
