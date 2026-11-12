@@ -264,6 +264,8 @@ memories/
   <project>/            # compressed + encrypted project memories
 ```
 
+Never synced: `node_modules`, `.git`, `__pycache__` and `.venv` anywhere in skills, commands or memories, plus `skills/synced/` (skills Claude Code downloads itself on each machine) and `skills/.trash/`. Copies pushed by older versions are removed from the store on the next push.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, changeset workflow, and project structure.
