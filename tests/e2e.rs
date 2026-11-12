@@ -2526,7 +2526,9 @@ fn long_skill_paths_sync() {
     b.join();
     let synced = b.claude_dir().join("skills").join(&rel).join("index.d.ts");
     assert_eq!(std::fs::read_to_string(synced).unwrap(), "export {}");
+}
 
+#[test]
 fn skills_skip_dependency_and_managed_dirs() {
     let env = TestEnv::new("skills_skip");
     let a = env.machine("a");
