@@ -335,6 +335,7 @@ fn init_with_options(
             strict_path_validation: false,
             compression: true,
             compression_level: config::default_compression_level(),
+            ignore: Vec::new(),
             storage,
         },
         encryption,
