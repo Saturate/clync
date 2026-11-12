@@ -227,7 +227,22 @@ skills = true
 global_claude_md = true
 ```
 
-The sync repo also contains a plaintext `clync.toml` with the encryption method and targets, so `clync join` knows what to expect.
+The sync repo also contains a plaintext `clync.toml` with the encryption method, targets and ignore rules, so `clync join` knows what to expect.
+
+### Ignoring files
+
+Skills, commands and memories never sync `node_modules`, `.git`, `__pycache__` or `.venv` (at any depth), or `skills/synced/` (skills Claude Code downloads itself) and `skills/.trash/`. Adjust this with `sync.ignore`, a list of exact file or directory names:
+
+```toml
+[sync]
+ignore = ["dist", ".DS_Store", "!node_modules"]  # "!name" re-enables a default
+```
+
+```bash
+clync config set sync.ignore '["dist", "!node_modules"]'
+```
+
+Anything matching is skipped on push and pull, and removed from the store on the next push. The rules are per machine; `clync join` copies them from the repo, so keep them the same everywhere, or machines will keep removing what others push.
 
 ## MCP server
 
@@ -264,7 +279,7 @@ memories/
   <project>/            # compressed + encrypted project memories
 ```
 
-Never synced: `node_modules`, `.git`, `__pycache__` and `.venv` anywhere in skills, commands or memories, plus `skills/synced/` (skills Claude Code downloads itself on each machine) and `skills/.trash/`. Copies pushed by older versions are removed from the store on the next push.
+See [Ignoring files](#ignoring-files) for what is never synced.
 
 ## Contributing
 
