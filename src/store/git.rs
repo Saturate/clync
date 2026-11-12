@@ -36,7 +36,7 @@ impl GitStore {
     pub fn init_repo(repo_path: &Path) -> Result<Self> {
         std::fs::create_dir_all(repo_path)?;
         if !repo_path.join(".git").exists() {
-            let output = std::process::Command::new("git")
+            let output = crate::gitcmd::git()
                 .args(["init", "-b", "main"])
                 .current_dir(repo_path)
                 .output()
@@ -51,7 +51,7 @@ impl GitStore {
     }
 
     pub fn clone_repo(url: &str, dest: &Path) -> Result<Self> {
-        let output = std::process::Command::new("git")
+        let output = crate::gitcmd::git()
             .args(["clone", "--quiet", url, &dest.to_string_lossy()])
             .output()
             .context("git clone failed")?;
@@ -63,7 +63,7 @@ impl GitStore {
     }
 
     pub fn has_remote(&self) -> bool {
-        std::process::Command::new("git")
+        crate::gitcmd::git()
             .args(["remote"])
             .current_dir(self.fs.root())
             .output()
@@ -72,7 +72,7 @@ impl GitStore {
     }
 
     pub fn get_remote_url(&self) -> Option<String> {
-        std::process::Command::new("git")
+        crate::gitcmd::git()
             .args(["remote", "get-url", "origin"])
             .current_dir(self.fs.root())
             .output()
@@ -86,7 +86,7 @@ impl GitStore {
     }
 
     pub fn checkout_first_branch(&self) -> Result<()> {
-        let branches = std::process::Command::new("git")
+        let branches = crate::gitcmd::git()
             .args(["branch", "-r"])
             .current_dir(self.fs.root())
             .output()
@@ -97,7 +97,7 @@ impl GitStore {
             if branch == "HEAD" || branch.contains("->") {
                 continue;
             }
-            let _ = std::process::Command::new("git")
+            let _ = crate::gitcmd::git()
                 .args(["checkout", branch])
                 .current_dir(self.fs.root())
                 .status();
@@ -108,7 +108,7 @@ impl GitStore {
 
     pub fn commit(&self, message: &str) -> Result<()> {
         self.run_git(&["add", "-A"])?;
-        let status = std::process::Command::new("git")
+        let status = crate::gitcmd::git()
             .args(["diff", "--cached", "--quiet"])
             .current_dir(self.fs.root())
             .status()?;
@@ -148,7 +148,7 @@ impl GitStore {
             Err((_status, stderr)) => stderr,
         };
 
-        let branch = std::process::Command::new("git")
+        let branch = crate::gitcmd::git()
             .args(["branch", "--show-current"])
             .current_dir(self.fs.root())
             .output()
@@ -169,7 +169,7 @@ impl GitStore {
     }
 
     fn push_capturing_stderr(&self, args: &[&str]) -> Result<(), (String, String)> {
-        let output = match std::process::Command::new("git")
+        let output = match crate::gitcmd::git()
             .args(args)
             .current_dir(self.fs.root())
             .output()
@@ -192,7 +192,7 @@ impl GitStore {
         if !self.has_remote() {
             return Ok(());
         }
-        let output = std::process::Command::new("git")
+        let output = crate::gitcmd::git()
             .args(["pull", "--ff-only"])
             .current_dir(self.fs.root())
             .output()
@@ -213,7 +213,7 @@ impl GitStore {
 
     fn run_git(&self, args: &[&str]) -> Result<()> {
         if self.verbose {
-            let status = std::process::Command::new("git")
+            let status = crate::gitcmd::git()
                 .args(args)
                 .current_dir(self.fs.root())
                 .status()
@@ -222,7 +222,7 @@ impl GitStore {
                 bail!("git {} exited with {}", args.join(" "), status);
             }
         } else {
-            let output = std::process::Command::new("git")
+            let output = crate::gitcmd::git()
                 .args(args)
                 .current_dir(self.fs.root())
                 .output()
@@ -389,7 +389,7 @@ mod tests {
     fn add_remote_and_check() {
         let dir = temp_dir("add_remote");
         let bare = dir.join("bare.git");
-        std::process::Command::new("git")
+        crate::gitcmd::git()
             .args(["init", "--bare", "-b", "main"])
             .arg(&bare)
             .output()
@@ -415,7 +415,7 @@ mod tests {
             &["config", "user.name", "test"],
             &["config", "commit.gpgsign", "false"],
         ] {
-            std::process::Command::new("git")
+            crate::gitcmd::git()
                 .args(args)
                 .current_dir(repo)
                 .output()
@@ -431,7 +431,7 @@ mod tests {
         store.write_file("file.txt", b"content").unwrap();
         store.commit("test commit").unwrap();
 
-        let log = std::process::Command::new("git")
+        let log = crate::gitcmd::git()
             .args(["log", "--oneline"])
             .current_dir(store.root())
             .output()
@@ -491,7 +491,7 @@ mod tests {
     fn push_and_pull_with_bare_remote() {
         let dir = temp_dir("push_pull_bare");
         let bare = dir.join("bare.git");
-        std::process::Command::new("git")
+        crate::gitcmd::git()
             .args(["init", "--bare", "-b", "main"])
             .arg(&bare)
             .output()
@@ -526,7 +526,7 @@ mod tests {
     fn sync_up_and_sync_down() {
         let dir = temp_dir("sync_up_down");
         let bare = dir.join("bare.git");
-        std::process::Command::new("git")
+        crate::gitcmd::git()
             .args(["init", "--bare", "-b", "main"])
             .arg(&bare)
             .output()

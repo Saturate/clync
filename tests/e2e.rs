@@ -2494,3 +2494,35 @@ fn compression_backward_compat_pull() {
         "content should survive pull without compression"
     );
 }
+
+#[test]
+fn long_skill_paths_sync() {
+    // Skills can carry deep trees (node_modules). Once the sync repo's own
+    // path is added these exceed Windows' 260-char MAX_PATH in git.
+    let env = TestEnv::new("long_paths");
+    let a = env.machine("a");
+    a.init();
+
+    let rel: PathBuf = ["deep-skill", "node_modules", "@types", "node"]
+        .iter()
+        .chain(std::iter::repeat_n(&"a-fairly-long-directory-name", 8))
+        .collect();
+    let dir = a.claude_dir().join("skills").join(&rel);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("index.d.ts"), "export {}").unwrap();
+    assert!(
+        a.sync_repo
+            .join("extras/skills")
+            .join(&rel)
+            .to_string_lossy()
+            .len()
+            > 260,
+        "test path should exceed MAX_PATH"
+    );
+    a.push();
+
+    let b = env.machine("b");
+    b.join();
+    let synced = b.claude_dir().join("skills").join(&rel).join("index.d.ts");
+    assert_eq!(std::fs::read_to_string(synced).unwrap(), "export {}");
+}

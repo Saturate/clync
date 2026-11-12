@@ -294,7 +294,7 @@ fn clone_repo(url: &str, target: &Path) -> Result<()> {
     if target.exists() {
         bail!("target directory already exists: {}", target.display());
     }
-    let output = std::process::Command::new("git")
+    let output = crate::gitcmd::git()
         .arg("clone")
         .arg("--quiet")
         .arg(url)

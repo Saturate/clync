@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 
 pub fn build_remote_map(claude_projects_dir: &Path) -> HashMap<String, String> {
     build_remote_map_with(claude_projects_dir, &git_remote_url)
@@ -99,7 +98,7 @@ pub fn git_remote_url(path: &str) -> Option<String> {
     if !path.exists() {
         return None;
     }
-    let output = Command::new("git")
+    let output = crate::gitcmd::git()
         .args(["remote", "get-url", "origin"])
         .current_dir(path)
         .output()
