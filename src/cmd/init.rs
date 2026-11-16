@@ -43,8 +43,19 @@ pub fn cmd_init(
         None
     };
 
-    let storage = match storage_type {
-        "folder" => StorageConfig::Folder { path: repo },
+    let storage = storage_from_flag(storage_type, repo)?;
+
+    init_with_options(
+        storage,
+        op_ref,
+        enc_override,
+        config::SyncTargets::default(),
+    )
+}
+
+fn storage_from_flag(storage_type: &str, repo: PathBuf) -> Result<StorageConfig> {
+    match storage_type {
+        "folder" => Ok(StorageConfig::Folder { path: repo }),
         #[cfg(feature = "s3")]
         "s3" => {
             bail!(
@@ -55,22 +66,15 @@ pub fn cmd_init(
         "s3" => {
             bail!("S3 storage is not available. Rebuild with: cargo install clync --features s3");
         }
-        "git" => StorageConfig::Git {
+        "git" => Ok(StorageConfig::Git {
             path: repo,
             auto_push: true,
             lfs_threshold: config::default_lfs_threshold(),
-        },
+        }),
         other => {
             bail!("unknown storage type: {other}. Valid options: git, folder, s3");
         }
-    };
-
-    init_with_options(
-        storage,
-        op_ref,
-        enc_override,
-        config::SyncTargets::default(),
-    )
+    }
 }
 
 fn cmd_init_interactive(input: &dyn InputSource) -> Result<()> {
