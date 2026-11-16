@@ -17,7 +17,9 @@ pub fn write_session(session: &ConvertedSession) -> Result<String> {
         session.project_dir.display()
     );
     let mut conn = open_db()?;
-    let tx = conn.transaction()?;
+    // IMMEDIATE takes the write lock up front, so a concurrent opencode write
+    // waits on busy_timeout instead of failing a read-to-write upgrade.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let project_id = resolve_project(&tx, &session.project_dir)?;
 
     let first_ts = session.messages.first().map_or(0, |m| ms(m.timestamp_ms));

@@ -140,12 +140,11 @@ impl Run {
             );
             return Ok(false);
         }
+        ir.messages = pair_tool_results(std::mem::take(&mut ir.messages));
         if ir.messages.is_empty() {
             println!("  skip {}: no conversation to convert", session_ref.label());
             return Ok(false);
         }
-
-        ir.messages = pair_tool_results(std::mem::take(&mut ir.messages));
         let tool_calls = ir
             .messages
             .iter()
@@ -207,9 +206,7 @@ fn normalize_project(arg: &str) -> Result<PathBuf> {
     } else {
         std::env::current_dir()?.join(expanded)
     };
-    Ok(absolute
-        .canonicalize()
-        .unwrap_or_else(|_| absolute.components().collect()))
+    Ok(super::canonical_dir(&absolute).unwrap_or_else(|| super::lexical_normalize(&absolute)))
 }
 
 fn existing_conversions(target: &SourceTool) -> Result<HashMap<Origin, Existing>> {

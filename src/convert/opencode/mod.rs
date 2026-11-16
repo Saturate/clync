@@ -123,7 +123,9 @@ pub fn provenance_index() -> Result<HashMap<Origin, String>> {
 /// foreign-key setting, and `event` hangs off `event_sequence`, not the session.
 pub fn delete_session(id: &str) -> Result<()> {
     let mut conn = open_db()?;
-    let tx = conn.transaction()?;
+    // IMMEDIATE takes the write lock up front, so a concurrent opencode write
+    // waits on busy_timeout instead of failing a read-to-write upgrade.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     for sql in [
         "DELETE FROM event WHERE aggregate_id = ?1",
         "DELETE FROM event_sequence WHERE aggregate_id = ?1",

@@ -92,12 +92,13 @@ pub fn resolve_session(arg: &str) -> Result<PathBuf> {
     }
 }
 
-/// Converted sessions already in Claude, keyed by origin. Reads only the
-/// first few lines of each file since the provenance entry is written near the top.
+/// Converted sessions already in Claude, keyed by origin. Scans whole files:
+/// clync's sync merge moves entries without a uuid, provenance included, to
+/// the end.
 pub fn provenance_index() -> Result<HashMap<Origin, PathBuf>> {
     let mut index = HashMap::new();
     for path in session_files(&projects_dir()?)? {
-        let origin = jsonl::read_head(&path, 5).into_iter().find_map(|e| {
+        let origin = find_provenance(&path).and_then(|e| {
             if e.get("type").and_then(|v| v.as_str()) != Some("clync-provenance") {
                 return None;
             }
@@ -146,6 +147,18 @@ struct SessionMeta {
     custom_title: Option<String>,
     earliest_ts: Option<u64>,
     cwd: Option<PathBuf>,
+}
+
+/// Only lines mentioning the marker get parsed; session files can be hundreds of MB.
+pub(crate) fn find_provenance(path: &Path) -> Option<Value> {
+    let reader = BufReader::new(fs::File::open(path).ok()?);
+    reader
+        .split(b'\n')
+        .map_while(Result::ok)
+        .map(|line| String::from_utf8_lossy(&line).into_owned())
+        .filter(|line| line.contains("\"clync-provenance\""))
+        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+        .find(|e| e.get("type").and_then(|v| v.as_str()) == Some("clync-provenance"))
 }
 
 /// Cheap scan: only lines that mention the fields we need get parsed, since

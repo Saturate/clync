@@ -108,6 +108,7 @@ struct ReadState {
     carried_stash: Option<Vec<Value>>,
     messages: Vec<ConvertedMessage>,
     stash: Vec<Value>,
+    last_ts: u64,
 }
 
 impl ReadState {
@@ -151,7 +152,9 @@ impl ReadState {
         let Some(msg) = entry.get("message") else {
             return;
         };
-        let ts = jsonl::entry_timestamp(entry).unwrap_or(0);
+        // A missing timestamp borrows the previous one rather than jumping to the epoch.
+        let ts = jsonl::entry_timestamp(entry).unwrap_or(self.last_ts);
+        self.last_ts = ts;
         match msg.get("role").and_then(|r| r.as_str()) {
             Some("user") => {
                 let content = msg.get("content");

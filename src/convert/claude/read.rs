@@ -50,7 +50,17 @@ pub fn read_session(path: &Path) -> Result<ConvertedSession> {
         .to_string();
     let project_dir = state.cwd.clone().unwrap_or_else(|| {
         let folder = path.parent().and_then(|p| p.file_name());
-        decode_project_dir(&folder.unwrap_or_default().to_string_lossy())
+        let decoded = decode_project_dir(&folder.unwrap_or_default().to_string_lossy());
+        // Decoding is lossy: '-' in the original path comes back as '/'
+        if !decoded.is_dir() {
+            eprintln!(
+                "  warning: {} records no working directory and {} doesn't exist; \
+                 pass a session with a recorded cwd, or the target may reject or misplace it",
+                path.display(),
+                decoded.display()
+            );
+        }
+        decoded
     });
     Ok(state.finish(uuid, project_dir))
 }

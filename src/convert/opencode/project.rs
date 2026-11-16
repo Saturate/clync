@@ -25,7 +25,7 @@ pub fn resolve_project(conn: &Connection, dir: &Path) -> Result<String> {
             (id, PathBuf::from(toplevel), Some("git"))
         }
         None => {
-            let path = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+            let path = super::super::canonical_dir(dir).unwrap_or_else(|| dir.to_path_buf());
             let path_str = path.to_string_lossy().to_string();
             // A row recorded while the folder still existed beats recomputing
             // from a path that may no longer resolve the same way.

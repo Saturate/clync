@@ -12,10 +12,45 @@ pub mod tools;
 
 pub use cli::{ConvertArgs, run};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use serde_json::Value;
+
+/// Canonicalize a directory the way the tools record it. On Windows,
+/// `canonicalize` returns `\\?\C:\...`, which never equals the `C:\...`
+/// the tools store.
+pub fn canonical_dir(path: &Path) -> Option<PathBuf> {
+    let canonical = path.canonicalize().ok()?;
+    #[cfg(windows)]
+    {
+        let s = canonical.to_string_lossy();
+        if let Some(share) = s.strip_prefix(r"\\?\UNC\") {
+            return Some(PathBuf::from(format!(r"\\{share}")));
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return Some(PathBuf::from(rest));
+        }
+    }
+    Some(canonical)
+}
+
+/// Resolve `.` and `..` without touching the filesystem, for paths that
+/// don't exist.
+pub fn lexical_normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
 
 /// Session metadata after conversion.
 #[derive(Debug, Clone)]

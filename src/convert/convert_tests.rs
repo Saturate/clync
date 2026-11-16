@@ -72,11 +72,13 @@ fn claude_reader_keeps_conversation_and_stashes_only_content() {
     let dir = std::env::temp_dir().join(format!("clync-convert-unit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("11111111-2222-3333-4444-555555555555.jsonl");
+    // An absolute path on every OS; a bare `/work` has no drive on Windows.
+    let cwd = std::env::temp_dir().join("my-repo");
     let lines = [
         json!({"type": "ai-title", "aiTitle": "Generated"}),
         json!({"type": "custom-title", "customTitle": "Mine"}),
         json!({"type": "attachment", "attachment": {"big": "noise"}}),
-        json!({"type": "user", "uuid": "u1", "parentUuid": null, "cwd": "/work/my-repo",
+        json!({"type": "user", "uuid": "u1", "parentUuid": null, "cwd": cwd.to_string_lossy(),
                "timestamp": "2026-01-01T00:00:00Z",
                "message": {"role": "user", "content": "hello"}}),
         json!({"type": "assistant", "uuid": "a1", "parentUuid": "u1", "timestamp": "2026-01-01T00:00:01Z",
@@ -99,7 +101,7 @@ fn claude_reader_keeps_conversation_and_stashes_only_content() {
 
     assert_eq!(ir.title, "Mine");
     // cwd wins over decoding the folder name, which would mangle "my-repo".
-    assert_eq!(ir.project_dir, std::path::Path::new("/work/my-repo"));
+    assert_eq!(ir.project_dir, cwd);
     assert_eq!(ir.model.as_deref(), Some("claude-x"));
     let roles: Vec<_> = ir.messages.iter().map(|m| m.role.clone()).collect();
     assert_eq!(
@@ -242,4 +244,33 @@ fn pi_reader_follows_the_live_branch() {
     std::fs::remove_dir_all(path.parent().unwrap()).ok();
     assert_eq!(user_texts(&ir), ["first", "answer", "live"]);
     assert_eq!(ir.title, "Named");
+}
+
+#[test]
+fn claude_provenance_found_after_sync_merge_moves_it_to_the_end() {
+    let dir = std::env::temp_dir().join(format!("clync-convert-prov-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("s.jsonl");
+    let mut lines: Vec<Value> = (0..10)
+        .map(|i| json!({"type": "user", "uuid": format!("u{i}"), "message": {"role": "user", "content": "x"}}))
+        .collect();
+    lines.push(json!({"type": "clync-provenance", "source": "pi", "sourceId": "abc"}));
+    let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(&path, body).unwrap();
+
+    let found = claude::find_provenance(&path);
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(
+        found.and_then(|e| e.get("sourceId").cloned()),
+        Some(json!("abc"))
+    );
+}
+
+#[test]
+fn lexical_normalize_resolves_parent_dirs() {
+    let base = std::env::temp_dir();
+    assert_eq!(
+        super::lexical_normalize(&base.join("a").join("..").join(".").join("gone")),
+        base.join("gone")
+    );
 }
