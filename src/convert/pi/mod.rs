@@ -21,7 +21,7 @@ pub const PROVENANCE_TYPE: &str = "clync-provenance";
 pub const STASH_TYPE: &str = "clync-stash";
 
 pub fn sessions_dir() -> Result<PathBuf> {
-    Ok(dirs::home_dir()
+    Ok(crate::config::home_dir()
         .context("cannot find home directory")?
         .join(".pi")
         .join("agent")

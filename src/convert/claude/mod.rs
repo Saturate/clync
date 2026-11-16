@@ -18,50 +18,15 @@ use serde_json::Value;
 use super::{Origin, jsonl};
 
 pub fn projects_dir() -> Result<PathBuf> {
-    Ok(dirs::home_dir()
+    Ok(crate::config::home_dir()
         .context("cannot find home directory")?
         .join(".claude")
         .join("projects"))
 }
 
-/// Encode a project directory path the way Claude Code does: every character
-/// that isn't an ASCII letter or digit becomes '-'.
-/// `/Users/alkj/code/DCC.Frontends` -> `-Users-alkj-code-DCC-Frontends`
-/// Claude works on UTF-16 code units, so a character outside the BMP becomes
-/// two dashes, and names over 200 units are cut and suffixed with a hash.
+/// Claude Code's project folder name for `path`.
 pub fn encode_project_dir(path: &Path) -> String {
-    const MAX_LEN: usize = 200;
-    let raw = path.to_string_lossy();
-    let units: Vec<u16> = raw.encode_utf16().collect();
-    let encoded: String = units
-        .iter()
-        .map(|&u| match char::from_u32(u32::from(u)) {
-            Some(c) if c.is_ascii_alphanumeric() => c,
-            _ => '-',
-        })
-        .collect();
-    if encoded.len() <= MAX_LEN {
-        return encoded;
-    }
-    // Java-style string hash over UTF-16 units, as Claude Code computes it.
-    let hash = units.iter().fold(0i32, |h, &u| {
-        h.wrapping_shl(5).wrapping_sub(h).wrapping_add(i32::from(u))
-    });
-    format!("{}-{}", &encoded[..MAX_LEN], to_base36(hash.unsigned_abs()))
-}
-
-fn to_base36(mut n: u32) -> String {
-    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    if n == 0 {
-        return "0".to_string();
-    }
-    let mut out = Vec::new();
-    while n > 0 {
-        out.push(DIGITS[(n % 36) as usize]);
-        n /= 36;
-    }
-    out.reverse();
-    String::from_utf8(out).unwrap_or_default()
+    crate::manifest::encode_project_path(&path.to_string_lossy())
 }
 
 /// Best-effort decode of a project folder name. Lossy for paths that contain

@@ -22,7 +22,7 @@ const XDG_DATA_HOME: &str = "XDG_DATA_HOME";
 pub fn db_path() -> Result<PathBuf> {
     let data_dir = match std::env::var_os(XDG_DATA_HOME) {
         Some(xdg) if !xdg.is_empty() => PathBuf::from(xdg),
-        _ => dirs::home_dir()
+        _ => crate::config::home_dir()
             .context("cannot find home directory")?
             .join(".local")
             .join("share"),
