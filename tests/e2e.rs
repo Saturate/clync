@@ -1032,7 +1032,7 @@ fn large_session_sync() {
     a.init();
 
     let mut entries = vec![mode_entry()];
-    let mut prev = String::new();
+    let mut prev = String::default();
     for i in 0..200 {
         let uuid = format!("msg-{i}");
         let parent = if prev.is_empty() {
@@ -1410,7 +1410,7 @@ fn extras_not_in_repo_when_disabled() {
     assert!(sessions_dir.exists(), "sessions dir should exist");
     let session_count = std::fs::read_dir(&sessions_dir)
         .unwrap()
-        .filter(|e| e.as_ref().unwrap().file_type().unwrap().is_file())
+        .filter(|e| !e.as_ref().unwrap().file_type().unwrap().is_dir())
         .count();
     assert_eq!(session_count, 1, "should have 1 session file");
 }
@@ -1920,7 +1920,8 @@ fn mv_session_no_match() {
     let a = env.machine("a");
     a.init();
 
-    let output = a.run(&["mv", "nonexistent-uuid", "/tmp/whatever"]);
+    let target = a.claude_dir().join("whatever");
+    let output = a.run(&["mv", "nonexistent-uuid", &target.to_string_lossy()]);
     assert!(!output.status.success(), "should fail for nonexistent UUID");
 }
 
@@ -1975,7 +1976,8 @@ fn mv_no_source_project_fails() {
     let a = env.machine("a");
     a.init();
 
-    let output = a.run(&["mv", "/some/nonexistent/source", "/tmp/target"]);
+    let target = a.claude_dir().join("target");
+    let output = a.run(&["mv", "/some/nonexistent/source", &target.to_string_lossy()]);
     assert!(
         !output.status.success(),
         "should fail when source project has no sessions"
