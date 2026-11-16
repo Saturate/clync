@@ -116,102 +116,108 @@ pub fn cmd_log(limit: usize, json: bool) -> Result<()> {
 }
 
 pub fn cmd_config(action: Option<super::ConfigAction>) -> Result<()> {
-    let action = action.unwrap_or(super::ConfigAction::Show);
-    match action {
-        super::ConfigAction::Show => {
-            let path = Config::config_path()?;
-            if !path.exists() {
-                bail!("no config found. Run `clync init` first.");
-            }
-            let config = Config::load()?;
-            let enc_method = match &config.encryption {
-                EncryptionConfig::KeyFile { path } => format!("key_file ({})", path.display()),
-                EncryptionConfig::Passphrase { env_var } => format!("passphrase (${env_var})"),
-                EncryptionConfig::OnePassword { reference } => format!("1password ({reference})"),
-                EncryptionConfig::Bitwarden { item_id, .. } => format!("bitwarden ({item_id})"),
-                EncryptionConfig::Pass { entry } => format!("pass ({entry})"),
-                EncryptionConfig::None => "none (plain text)".into(),
-            };
-            let t = &config.targets;
-            let storage_desc = match &config.sync.storage {
-                crate::config::StorageConfig::Git {
-                    path, auto_push, ..
-                } => {
-                    format!("git ({}), auto_push: {auto_push}", path.display())
-                }
-                crate::config::StorageConfig::Folder { path } => {
-                    format!("folder ({})", path.display())
-                }
-                #[cfg(feature = "s3")]
-                crate::config::StorageConfig::S3 { bucket, region, .. } => {
-                    format!("s3 ({bucket}, {region})")
-                }
-            };
-            println!("storage:         {storage_desc}");
-            println!("claude dir:      {}", config.sync.claude_dir.display());
-            println!("encryption:      {enc_method}");
-            println!("companion dirs:  {}", config.sync.include_companion_dirs);
-            println!(
-                "compression:     {}",
-                if config.sync.compression {
-                    format!("zstd (level {})", config.sync.compression_level)
-                } else {
-                    "disabled".into()
-                }
-            );
-            if config.sync.storage.is_git() {
-                let lfs = config.sync.storage.lfs_threshold();
-                let lfs_display = if lfs == 0 {
-                    "disabled".to_string()
-                } else {
-                    format!("{}MB threshold", lfs / (1024 * 1024))
-                };
-                println!("git lfs:         {lfs_display}");
-            }
-            println!();
-            println!("targets:");
-            println!("  sessions:        {}", t.sessions);
-            println!("  memories:        {}", t.memories);
-            println!("  settings:        {}", t.settings);
-            println!("  commands:        {}", t.commands);
-            println!("  skills:          {}", t.skills);
-            println!("  global CLAUDE.md: {}", t.global_claude_md);
-        }
-        super::ConfigAction::Edit => {
-            let path = Config::config_path()?;
-            if !path.exists() {
-                bail!("no config found. Run `clync init` first.");
-            }
-            let fallback = if cfg!(windows) { "notepad" } else { "vi" };
-            let editor = std::env::var(EDITOR_VAR).unwrap_or_else(|_| fallback.into());
-            std::process::Command::new(&editor)
-                .arg(&path)
-                .status()
-                .with_context(|| format!("failed to open {editor}"))?;
-        }
+    match action.unwrap_or(super::ConfigAction::Show) {
+        super::ConfigAction::Show => config_show(),
+        super::ConfigAction::Edit => config_edit(),
         super::ConfigAction::Path => {
-            let path = Config::config_path()?;
-            println!("{}", path.display());
+            println!("{}", Config::config_path()?.display());
+            Ok(())
         }
-        super::ConfigAction::Set { key, value } => {
-            let path = Config::config_path()?;
-            if !path.exists() {
-                bail!("no config found. Run `clync init` first.");
-            }
-            let contents = std::fs::read_to_string(&path)?;
-            let mut doc: toml::Table = toml::from_str(&contents).context("invalid config")?;
-
-            set_toml_value(&mut doc, &key, &value)?;
-
-            let new_contents = toml::to_string_pretty(&doc)?;
-
-            let _: Config = toml::from_str(&new_contents)
-                .context("invalid config after set. Check key and value types.")?;
-
-            std::fs::write(&path, new_contents)?;
-            println!("set {key} = {value}");
-        }
+        super::ConfigAction::Set { key, value } => config_set(&key, &value),
     }
+}
+
+fn existing_config_path() -> Result<PathBuf> {
+    let path = Config::config_path()?;
+    if !path.exists() {
+        bail!("no config found. Run `clync init` first.");
+    }
+    Ok(path)
+}
+
+fn config_show() -> Result<()> {
+    existing_config_path()?;
+    let config = Config::load()?;
+    let enc_method = match &config.encryption {
+        EncryptionConfig::KeyFile { path } => format!("key_file ({})", path.display()),
+        EncryptionConfig::Passphrase { env_var } => format!("passphrase (${env_var})"),
+        EncryptionConfig::OnePassword { reference } => format!("1password ({reference})"),
+        EncryptionConfig::Bitwarden { item_id, .. } => format!("bitwarden ({item_id})"),
+        EncryptionConfig::Pass { entry } => format!("pass ({entry})"),
+        EncryptionConfig::None => "none (plain text)".into(),
+    };
+    let t = &config.targets;
+    let storage_desc = match &config.sync.storage {
+        crate::config::StorageConfig::Git {
+            path, auto_push, ..
+        } => {
+            format!("git ({}), auto_push: {auto_push}", path.display())
+        }
+        crate::config::StorageConfig::Folder { path } => {
+            format!("folder ({})", path.display())
+        }
+        #[cfg(feature = "s3")]
+        crate::config::StorageConfig::S3 { bucket, region, .. } => {
+            format!("s3 ({bucket}, {region})")
+        }
+    };
+    println!("storage:         {storage_desc}");
+    println!("claude dir:      {}", config.sync.claude_dir.display());
+    println!("encryption:      {enc_method}");
+    println!("companion dirs:  {}", config.sync.include_companion_dirs);
+    println!(
+        "compression:     {}",
+        if config.sync.compression {
+            format!("zstd (level {})", config.sync.compression_level)
+        } else {
+            "disabled".into()
+        }
+    );
+    if config.sync.storage.is_git() {
+        let lfs = config.sync.storage.lfs_threshold();
+        let lfs_display = if lfs == 0 {
+            "disabled".to_string()
+        } else {
+            format!("{}MB threshold", lfs / (1024 * 1024))
+        };
+        println!("git lfs:         {lfs_display}");
+    }
+    println!();
+    println!("targets:");
+    println!("  sessions:        {}", t.sessions);
+    println!("  memories:        {}", t.memories);
+    println!("  settings:        {}", t.settings);
+    println!("  commands:        {}", t.commands);
+    println!("  skills:          {}", t.skills);
+    println!("  global CLAUDE.md: {}", t.global_claude_md);
+    Ok(())
+}
+
+fn config_edit() -> Result<()> {
+    let path = existing_config_path()?;
+    let fallback = if cfg!(windows) { "notepad" } else { "vi" };
+    let editor = std::env::var(EDITOR_VAR).unwrap_or_else(|_| fallback.into());
+    std::process::Command::new(&editor)
+        .arg(&path)
+        .status()
+        .with_context(|| format!("failed to open {editor}"))?;
+    Ok(())
+}
+
+fn config_set(key: &str, value: &str) -> Result<()> {
+    let path = existing_config_path()?;
+    let contents = std::fs::read_to_string(&path)?;
+    let mut doc: toml::Table = toml::from_str(&contents).context("invalid config")?;
+
+    set_toml_value(&mut doc, key, value)?;
+
+    let new_contents = toml::to_string_pretty(&doc)?;
+
+    let _: Config = toml::from_str(&new_contents)
+        .context("invalid config after set. Check key and value types.")?;
+
+    std::fs::write(&path, new_contents)?;
+    println!("set {key} = {value}");
     Ok(())
 }
 
@@ -284,8 +290,7 @@ fn truncate_safe(s: &str, max: usize) -> String {
 pub(crate) fn format_age(mtime: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     let diff = now.saturating_sub(mtime);
     if diff < 3600 {
         format!("{}m ago", diff / 60)
@@ -444,7 +449,9 @@ fn move_session(
         session.entry.project_path,
     );
 
-    let src_project_dir = src_jsonl.parent().unwrap_or(std::path::Path::new("."));
+    let src_project_dir = src_jsonl
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
     let src_memory_dir = src_project_dir.join("memory");
     if src_memory_dir.exists() {
         let memory_files = find_session_memories(&dst_jsonl, &src_memory_dir);
