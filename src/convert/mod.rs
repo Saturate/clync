@@ -39,7 +39,7 @@ pub fn canonical_dir(path: &Path) -> Option<PathBuf> {
 /// don't exist.
 pub fn lexical_normalize(path: &Path) -> PathBuf {
     use std::path::Component;
-    let mut out = PathBuf::new();
+    let mut out = PathBuf::default();
     for c in path.components() {
         match c {
             Component::CurDir => {}

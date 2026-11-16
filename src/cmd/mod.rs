@@ -290,8 +290,7 @@ fn truncate_safe(s: &str, max: usize) -> String {
 pub(crate) fn format_age(mtime: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     let diff = now.saturating_sub(mtime);
     if diff < 3600 {
         format!("{}m ago", diff / 60)
@@ -450,7 +449,9 @@ fn move_session(
         session.entry.project_path,
     );
 
-    let src_project_dir = src_jsonl.parent().unwrap_or(std::path::Path::new("."));
+    let src_project_dir = src_jsonl
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
     let src_memory_dir = src_project_dir.join("memory");
     if src_memory_dir.exists() {
         let memory_files = find_session_memories(&dst_jsonl, &src_memory_dir);
