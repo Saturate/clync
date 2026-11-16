@@ -77,6 +77,7 @@ pub fn pull_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPullRes
     if !memories_dir.exists() {
         return Ok(MemoriesPullResult { pulled: 0 });
     }
+    let rules = crate::ignore::IgnoreRules::new(&config.sync.ignore, &[]);
 
     let projects_dir = claude_dir.join("projects");
     let remote_map = build_remote_map(&projects_dir);
@@ -97,7 +98,7 @@ pub fn pull_memories(config: &Config, cipher: &Cipher) -> Result<MemoriesPullRes
         let local_dir_name = resolve_project_dir(&normalized_name, &remote_map, &projects_dir)
             .unwrap_or_else(|| crate::manifest::denormalize_project_path(&normalized_name));
         let dst_dir = projects_dir.join(&local_dir_name).join("memory");
-        pulled += restore_memory_directory(&project_entry.path(), &dst_dir, cipher)?;
+        pulled += restore_memory_directory(&project_entry.path(), &dst_dir, &rules, cipher)?;
     }
 
     Ok(MemoriesPullResult { pulled })
@@ -194,26 +195,25 @@ pub fn migrate_from_extras(config: &Config, cipher: &Cipher) -> Result<(u32, u32
     Ok((projects, files))
 }
 
-fn restore_memory_directory(src_dir: &Path, dst_dir: &Path, cipher: &Cipher) -> Result<u32> {
+fn restore_memory_directory(
+    src_dir: &Path,
+    dst_dir: &Path,
+    rules: &crate::ignore::IgnoreRules,
+    cipher: &Cipher,
+) -> Result<u32> {
     if !src_dir.exists() {
         return Ok(0);
     }
     std::fs::create_dir_all(dst_dir)?;
     let mut count = 0u32;
-    for entry in WalkDir::new(src_dir).into_iter().filter_map(|e| e.ok()) {
-        if !entry.file_type().is_file() {
-            continue;
-        }
+    // Skipping here too keeps junk an older version pushed off other machines
+    for entry in rules.walk_files(src_dir, true) {
         let rel = entry
             .path()
             .strip_prefix(src_dir)?
             .to_string_lossy()
             .to_string();
-        let original_name = rel
-            .strip_suffix(".zst.age")
-            .or_else(|| rel.strip_suffix(".age"))
-            .or_else(|| rel.strip_suffix(".zst"))
-            .unwrap_or(&rel);
+        let original_name = crate::ignore::strip_storage_suffix(&rel);
         let dst = dst_dir.join(original_name);
 
         if original_name == "MEMORY.md" && dst.exists() {
@@ -452,5 +452,26 @@ mod tests {
             extract_link_target("- [Title](sub/dir/file.md) - desc"),
             Some("sub/dir/file.md".to_string())
         );
+    }
+
+    #[test]
+    fn restore_memory_directory_skips_ignored_names() {
+        let root = std::env::temp_dir()
+            .join("clync-memory-ignore-test")
+            .join(std::process::id().to_string());
+        std::fs::remove_dir_all(&root).ok();
+        let src = root.join("store");
+        for rel in ["note.md", "node_modules/dep.js", "scratch.tmp.zst"] {
+            let path = src.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "x").unwrap();
+        }
+        let dst = root.join("local");
+        let rules = crate::ignore::IgnoreRules::new(&["scratch.tmp".into()], &[]);
+        restore_memory_directory(&src, &dst, &rules, &Cipher::Plaintext).unwrap();
+        assert!(dst.join("note.md").exists());
+        assert!(!dst.join("node_modules").exists());
+        assert!(!dst.join("scratch.tmp").exists());
+        std::fs::remove_dir_all(&root).ok();
     }
 }
