@@ -103,7 +103,10 @@ pub fn resolve_session(arg: &str) -> Result<String> {
 pub fn provenance_index() -> Result<HashMap<Origin, String>> {
     let conn = open_db()?;
     let mut stmt = conn.prepare(
-        "SELECT id, metadata FROM session_v2 WHERE metadata LIKE '%\"clync_source_id\"%'",
+        // A fork copies its parent's metadata but is the user's own session,
+        // so `--force` must never pick it as the conversion to replace.
+        "SELECT id, metadata FROM session_v2 \
+         WHERE metadata LIKE '%\"clync_source_id\"%' AND fork_session_id IS NULL",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))

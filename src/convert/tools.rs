@@ -2,6 +2,10 @@
 
 /// Normalize tool name to lowercase for the IR.
 pub fn normalize_tool_name(name: &str) -> String {
+    // MCP tool names are matched exactly against the server's registration
+    if name.starts_with("mcp__") {
+        return name.to_string();
+    }
     let lower = name.to_lowercase();
     // opencode v2 uses "shell" for the command tool; normalize to "bash"
     match lower.as_str() {
@@ -25,6 +29,14 @@ pub fn to_claude_tool_name(normalized: &str) -> String {
         "websearch" => "WebSearch",
         "agent" => "Agent",
         "question" => "AskUserQuestion",
+        "task" => "Task",
+        "todowrite" => "TodoWrite",
+        "multiedit" => "MultiEdit",
+        "notebookedit" => "NotebookEdit",
+        "exitplanmode" => "ExitPlanMode",
+        "bashoutput" => "BashOutput",
+        "killshell" => "KillShell",
+        "skill" => "Skill",
         _ => return normalized.to_string(),
     }
     .to_string()
@@ -41,6 +53,16 @@ pub fn to_opencode_tool_name(normalized: &str) -> String {
         _ => normalized,
     }
     .to_string()
+}
+
+/// Normalize a pi tool name: the inverse of [`to_pi_tool_name`]. Kept out of
+/// [`normalize_tool_name`] because `task` means something else elsewhere.
+pub fn normalize_pi_tool_name(name: &str) -> String {
+    match name {
+        "fetch" => "webfetch".to_string(),
+        "task" => "agent".to_string(),
+        _ => normalize_tool_name(name),
+    }
 }
 
 /// Map normalized tool name to pi format (lowercase).
@@ -112,5 +134,30 @@ mod tests {
         assert_eq!(to_pi_tool_name("bash"), "bash");
         assert_eq!(to_pi_tool_name("webfetch"), "fetch");
         assert_eq!(to_pi_tool_name("agent"), "task");
+    }
+
+    #[test]
+    fn normalize_keeps_mcp_names_exact() {
+        assert_eq!(
+            normalize_tool_name("mcp__Claude_in_Chrome__navigate"),
+            "mcp__Claude_in_Chrome__navigate"
+        );
+    }
+
+    #[test]
+    fn claude_builtins_roundtrip_casing() {
+        for name in ["TodoWrite", "MultiEdit", "NotebookEdit", "Task", "Skill"] {
+            assert_eq!(to_claude_tool_name(&normalize_tool_name(name)), name);
+        }
+    }
+
+    #[test]
+    fn pi_names_roundtrip() {
+        for normalized in ["webfetch", "agent", "bash", "read"] {
+            assert_eq!(
+                normalize_pi_tool_name(&to_pi_tool_name(normalized)),
+                normalized
+            );
+        }
     }
 }

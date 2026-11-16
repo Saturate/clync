@@ -125,6 +125,13 @@ impl Env {
         (nums[0], nums[1])
     }
 
+    fn opencode_exec(&self, sql: &str) {
+        rusqlite::Connection::open(self.home.join(".local/share/opencode/opencode.db"))
+            .unwrap()
+            .execute_batch(sql)
+            .unwrap();
+    }
+
     fn opencode_column(&self, sql: &str) -> Vec<String> {
         let conn = rusqlite::Connection::open(self.home.join(".local/share/opencode/opencode.db"))
             .unwrap();
@@ -616,8 +623,21 @@ fn converted_sessions_open_in_each_tool() {
             "rerun {from} -> {to} converted again"
         );
     }
+    // An opencode fork copies the converted session's metadata; --force must
+    // replace the conversion, never the user's fork.
+    env.opencode_exec(
+        "CREATE TEMP TABLE f AS SELECT * FROM session_v2 \
+           WHERE json_extract(metadata, '$.clync_source') = 'claude'; \
+         UPDATE f SET fork_session_id = id, id = 'ses_userfork', version = 'fork'; \
+         INSERT INTO session_v2 SELECT * FROM f;",
+    );
     // --force replaces instead of duplicating.
     assert_eq!(env.convert("claude", "opencode", &["--force"]), (2, 0));
+    assert_eq!(
+        env.opencode_column("SELECT id FROM session_v2 WHERE id = 'ses_userfork'"),
+        ["ses_userfork"],
+        "--force deleted the user's fork"
+    );
 
     check_opencode(&env, &opencode_project[0]);
     check_pi(&env);

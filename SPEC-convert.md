@@ -16,7 +16,7 @@ Architecture: each format has a reader (into an intermediate representation) and
 # Claude Code -> opencode
 clync convert --from claude --to opencode <session-uuid-or-path>
 clync convert --from claude --to opencode --all          # convert all sessions
-clync convert --from claude --to opencode --project <dir> # sessions for one project (real path, not encoded)
+clync convert --from claude --to opencode --all --project <dir> # sessions for one project (real path, not encoded)
 
 # opencode -> Claude Code
 clync convert --from opencode --to claude <session-id>

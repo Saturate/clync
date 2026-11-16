@@ -40,6 +40,10 @@ pub fn run(args: &ConvertArgs) -> Result<()> {
     let refs = if args.all {
         all_sessions(&source, project.as_deref())?
     } else if let Some(arg) = args.session {
+        anyhow::ensure!(
+            project.is_none(),
+            "--project filters --all or --list; it can't be combined with a session ID"
+        );
         vec![resolve_one(&source, arg)?]
     } else {
         anyhow::bail!("specify a session ID/path, --all, or --list");
@@ -176,15 +180,15 @@ impl Run {
         };
         println!("  {} -> {}", summary, location);
         // Replace only after the new copy is safely written, so a failed
-        // write never loses the earlier conversion.
-        if let Some(old) = self.existing.insert(origin, written)
-            && let Err(e) = remove_existing(&old)
+        // write never loses the earlier conversion. If the old one can't be
+        // removed, drop the new one instead so there's never two.
+        if let Some(old) = self.existing.get(&origin)
+            && let Err(e) = remove_existing(old)
         {
-            eprintln!(
-                "  warning: couldn't remove the replaced conversion: {:#}",
-                e
-            );
+            remove_existing(&written).ok();
+            anyhow::bail!("couldn't remove the conversion being replaced: {:#}", e);
         }
+        self.existing.insert(origin, written);
         Ok(true)
     }
 }

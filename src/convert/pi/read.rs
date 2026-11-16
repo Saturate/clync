@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde_json::Value;
 
-use super::super::tools::normalize_tool_name;
+use super::super::tools::normalize_pi_tool_name;
 use super::super::{
     ContentBlock, ConvertedMessage, ConvertedSession, MessageRole, Origin, SourceTool, TokenUsage,
     branch_path, jsonl, thinking_stash, title_from_messages,
@@ -171,7 +171,7 @@ impl ReadState {
                 self.messages.push(ConvertedMessage::tool_result(
                     ts,
                     str_field(msg, "toolCallId").unwrap_or_default(),
-                    str_field(msg, "toolName").map(|n| normalize_tool_name(&n)),
+                    str_field(msg, "toolName").map(|n| normalize_pi_tool_name(&n)),
                     jsonl::text_blocks(msg.get("content")),
                     msg.get("isError").and_then(|v| v.as_bool()) == Some(true),
                 ));
@@ -224,7 +224,7 @@ impl ReadState {
                 }
                 Some("toolCall") => blocks.push(ContentBlock::ToolCall {
                     id: str_field(block, "id").unwrap_or_default(),
-                    name: normalize_tool_name(&str_field(block, "name").unwrap_or_default()),
+                    name: normalize_pi_tool_name(&str_field(block, "name").unwrap_or_default()),
                     // pi calls the tool input "arguments"
                     input: block.get("arguments").cloned().unwrap_or(Value::Null),
                 }),
