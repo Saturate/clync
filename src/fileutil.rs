@@ -109,8 +109,7 @@ pub fn mtime_secs(path: &Path) -> Result<u64> {
     Ok(std::fs::metadata(path)?
         .modified()?
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0))
+        .map_or(0, |d| d.as_secs()))
 }
 
 pub fn sync_file_if_changed(
@@ -167,6 +166,8 @@ pub fn restore_file(src: &Path, dst: &Path, cipher: &Cipher) -> Result<u32> {
     Ok(1)
 }
 
+/// Returns how many store entries changed: files copied plus ignored
+/// entries pruned, so a push that only prunes still gets committed.
 pub fn sync_directory(
     src_dir: &Path,
     dst_dir: &Path,
@@ -176,12 +177,11 @@ pub fn sync_directory(
     compressed: bool,
     compression_level: i32,
 ) -> Result<u32> {
+    let mut count = rules.prune(dst_dir)?;
     if !src_dir.exists() {
-        return Ok(0);
+        return Ok(count);
     }
     std::fs::create_dir_all(dst_dir)?;
-    rules.prune(dst_dir)?;
-    let mut count = 0u32;
     for entry in rules.walk_files(src_dir, false) {
         let rel = entry.path().strip_prefix(src_dir)?;
         let dst = dst_dir.join(storage_name(&rel.to_string_lossy(), encrypted, compressed));
@@ -364,6 +364,25 @@ mod tests {
         std::fs::write(src.join("my-skill/SKILL.md"), "mine").unwrap();
         sync_directory(&src, &dst, &skip(), &Cipher::Plaintext, false, false, 3).unwrap();
         assert_eq!(files(&dst), ["my-skill/SKILL.md", "nested/synced/SKILL.md"]);
+        std::fs::remove_dir_all(&src).ok();
+        std::fs::remove_dir_all(&dst).ok();
+    }
+
+    #[test]
+    fn sync_directory_counts_prune_only_changes() {
+        // Nothing new to copy, but the store still has junk: the push must
+        // report a change, or the removal is never committed
+        let dst = tree("prune-only-dst");
+        let src = dst.with_file_name(format!("prune-only-src-{}", std::process::id()));
+        std::fs::remove_dir_all(&src).ok();
+        std::fs::create_dir_all(src.join("my-skill")).unwrap();
+        std::fs::copy(dst.join("my-skill/SKILL.md"), src.join("my-skill/SKILL.md")).unwrap();
+        let first =
+            sync_directory(&src, &dst, &skip(), &Cipher::Plaintext, false, false, 3).unwrap();
+        assert!(first > 0, "pruning junk should count as a change");
+        let second =
+            sync_directory(&src, &dst, &skip(), &Cipher::Plaintext, false, false, 3).unwrap();
+        assert_eq!(second, 0, "nothing left to prune or copy");
         std::fs::remove_dir_all(&src).ok();
         std::fs::remove_dir_all(&dst).ok();
     }

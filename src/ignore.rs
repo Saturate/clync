@@ -65,8 +65,12 @@ impl IgnoreRules {
     }
 
     /// Delete ignored entries from the store, e.g. copies an older version
-    /// (or an earlier, looser `sync.ignore`) pushed.
-    pub fn prune(&self, store_dir: &Path) -> Result<()> {
+    /// (or an earlier, looser `sync.ignore`) pushed. Returns how many
+    /// top-level matches were removed.
+    pub fn prune(&self, store_dir: &Path) -> Result<u32> {
+        if !store_dir.exists() {
+            return Ok(0);
+        }
         let mut stale = Vec::new();
         let mut walker = WalkDir::new(store_dir).into_iter();
         while let Some(entry) = walker.next() {
@@ -78,6 +82,7 @@ impl IgnoreRules {
                 stale.push(entry);
             }
         }
+        let removed = u32::try_from(stale.len()).unwrap_or(u32::MAX);
         for entry in stale {
             if entry.file_type().is_dir() {
                 std::fs::remove_dir_all(entry.path())?;
@@ -85,7 +90,7 @@ impl IgnoreRules {
                 std::fs::remove_file(entry.path())?;
             }
         }
-        Ok(())
+        Ok(removed)
     }
 }
 
