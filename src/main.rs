@@ -5,6 +5,7 @@ mod config;
 mod crypto;
 mod extras;
 pub(crate) mod fileutil;
+mod gitcmd;
 pub(crate) mod io;
 mod lfs;
 mod list;

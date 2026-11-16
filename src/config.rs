@@ -259,8 +259,8 @@ pub fn home_dir() -> Option<PathBuf> {
 
 pub fn expand_path(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
-    if s.starts_with("~/")
-        && let Some(home) = dirs::home_dir()
+    if (s.starts_with("~/") || s.starts_with("~\\"))
+        && let Some(home) = home_dir()
     {
         return home.join(&s[2..]);
     }

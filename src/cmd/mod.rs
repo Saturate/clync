@@ -182,7 +182,8 @@ pub fn cmd_config(action: Option<super::ConfigAction>) -> Result<()> {
             if !path.exists() {
                 bail!("no config found. Run `clync init` first.");
             }
-            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
+            let fallback = if cfg!(windows) { "notepad" } else { "vi" };
+            let editor = std::env::var(EDITOR_VAR).unwrap_or_else(|_| fallback.into());
             std::process::Command::new(&editor)
                 .arg(&path)
                 .status()
@@ -213,6 +214,8 @@ pub fn cmd_config(action: Option<super::ConfigAction>) -> Result<()> {
     }
     Ok(())
 }
+
+const EDITOR_VAR: &str = "EDITOR";
 
 fn set_toml_value(table: &mut toml::Table, key: &str, value: &str) -> Result<()> {
     let parts: Vec<&str> = key.split('.').collect();
@@ -343,7 +346,7 @@ fn mv_single_session(
             );
         }
         let home = config::home_dir()
-            .map(|h| h.to_string_lossy().replace('/', "-"))
+            .map(|h| crate::manifest::encode_project_path(&h.to_string_lossy()))
             .unwrap_or_default();
         let home_prefix = format!("{}-", home.trim_start_matches('-'));
         let local = matches.iter().find(|s| {
@@ -364,7 +367,7 @@ fn mv_single_session(
     };
 
     let target_path = config::expand_path(&PathBuf::from(target));
-    let encoded = target_path.to_string_lossy().replace('/', "-");
+    let encoded = crate::manifest::encode_project_path(&target_path.to_string_lossy());
     let target_dir = projects_dir.join(&encoded);
 
     move_session(session, &target_dir, &encoded, projects_dir)
@@ -377,7 +380,7 @@ fn mv_by_project(
     projects_dir: &std::path::Path,
 ) -> Result<()> {
     let source_path = config::expand_path(&PathBuf::from(source));
-    let source_encoded = source_path.to_string_lossy().replace('/', "-");
+    let source_encoded = crate::manifest::encode_project_path(&source_path.to_string_lossy());
 
     let matching: Vec<_> = sessions
         .iter()
@@ -389,7 +392,7 @@ fn mv_by_project(
     }
 
     let target_path = config::expand_path(&PathBuf::from(target));
-    let target_encoded = target_path.to_string_lossy().replace('/', "-");
+    let target_encoded = crate::manifest::encode_project_path(&target_path.to_string_lossy());
     let target_dir = projects_dir.join(&target_encoded);
 
     let count = matching.len();

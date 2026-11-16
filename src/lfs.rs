@@ -62,7 +62,7 @@ pub fn migrate_lfs_files(repo_path: &Path) -> Result<()> {
         args.extend(["--include-ref", &include_ref, "--exclude-ref", &exclude_ref]);
     }
 
-    let output = std::process::Command::new("git")
+    let output = crate::gitcmd::git()
         .args(&args)
         .current_dir(repo_path)
         .output()
@@ -77,7 +77,7 @@ pub fn migrate_lfs_files(repo_path: &Path) -> Result<()> {
 }
 
 fn upstream_tracking_ref(repo_path: &Path) -> Option<String> {
-    let output = std::process::Command::new("git")
+    let output = crate::gitcmd::git()
         .args(["rev-parse", "--abbrev-ref", "@{upstream}"])
         .current_dir(repo_path)
         .output()
@@ -96,9 +96,7 @@ pub fn is_large_file_push_error(stderr: &str) -> bool {
 }
 
 fn check_lfs_installed() -> Result<()> {
-    let output = std::process::Command::new("git")
-        .args(["lfs", "version"])
-        .output();
+    let output = crate::gitcmd::git().args(["lfs", "version"]).output();
     match output {
         Ok(o) if o.status.success() => Ok(()),
         _ => bail!(
@@ -114,7 +112,7 @@ fn install_lfs_local(repo_path: &Path) -> Result<()> {
     if marker.exists() {
         return Ok(());
     }
-    let status = std::process::Command::new("git")
+    let status = crate::gitcmd::git()
         .args(["lfs", "install", "--local"])
         .current_dir(repo_path)
         .status()
@@ -131,7 +129,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn lfs_available() -> bool {
-        std::process::Command::new("git")
+        crate::gitcmd::git()
             .args(["lfs", "version"])
             .output()
             .map(|o| o.status.success())
@@ -147,7 +145,7 @@ mod tests {
             std::fs::remove_dir_all(&dir).ok();
         }
         std::fs::create_dir_all(&dir).unwrap();
-        std::process::Command::new("git")
+        crate::gitcmd::git()
             .args(["init", "-b", "main"])
             .current_dir(&dir)
             .output()

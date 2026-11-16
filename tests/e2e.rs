@@ -311,6 +311,14 @@ fn msg(uuid: &str, parent: Option<&str>, ts: u64, role: &str, content: &str) -> 
     )
 }
 
+/// Mirrors how Claude Code names project dirs (non-alphanumerics -> '-')
+fn encode_path(p: &std::path::Path) -> String {
+    p.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 fn mode_entry() -> String {
     r#"{"type":"mode","mode":"normal","sessionId":"sess-1"}"#.to_string()
 }
@@ -1923,7 +1931,7 @@ fn mv_batch_by_project_path() {
     a.init();
 
     let source_path = a.home.join("code").join("old-project");
-    let source_encoded = source_path.to_string_lossy().replace('/', "-");
+    let source_encoded = encode_path(&source_path);
 
     a.write_session(
         &source_encoded,
@@ -1953,7 +1961,7 @@ fn mv_batch_by_project_path() {
         "s2 should exist in new project"
     );
 
-    let target_encoded = target_path.to_string_lossy().replace('/', "-");
+    let target_encoded = encode_path(&target_path);
     let s1_path = a.find_session_file("s1").unwrap();
     assert!(
         s1_path.to_string_lossy().contains(&*target_encoded),
@@ -2248,8 +2256,8 @@ fn setup_checkout_scenario(env: &TestEnv, a: &Machine) -> String {
     let patched = manifest_str.replace(
         r#""last_pushed_by":"#,
         &format!(
-            r#""remote_url":"{}","last_pushed_by":"#,
-            project_bare.to_str().unwrap()
+            r#""remote_url":{},"last_pushed_by":"#,
+            serde_json::to_string(project_bare.to_str().unwrap()).unwrap()
         ),
     );
     std::fs::write(&manifest_path, &patched).unwrap();
@@ -2485,4 +2493,37 @@ fn compression_backward_compat_pull() {
         content.contains("uncompressed data"),
         "content should survive pull without compression"
     );
+}
+
+#[test]
+fn long_skill_paths_sync() {
+    // Skills can carry deep trees (bundled assets, templates). Once the
+    // sync repo's own path is added these exceed Windows' 260-char MAX_PATH
+    // in git. (Avoid node_modules here: it is ignored and wouldn't sync.)
+    let env = TestEnv::new("long_paths");
+    let a = env.machine("a");
+    a.init();
+
+    let rel: PathBuf = ["deep-skill", "assets", "templates", "report"]
+        .iter()
+        .chain(std::iter::repeat_n(&"a-fairly-long-directory-name", 8))
+        .collect();
+    let dir = a.claude_dir().join("skills").join(&rel);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("index.d.ts"), "export {}").unwrap();
+    assert!(
+        a.sync_repo
+            .join("extras/skills")
+            .join(&rel)
+            .to_string_lossy()
+            .len()
+            > 260,
+        "test path should exceed MAX_PATH"
+    );
+    a.push();
+
+    let b = env.machine("b");
+    b.join();
+    let synced = b.claude_dir().join("skills").join(&rel).join("index.d.ts");
+    assert_eq!(std::fs::read_to_string(synced).unwrap(), "export {}");
 }
