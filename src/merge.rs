@@ -10,87 +10,129 @@ pub struct MergeResult {
     pub edits_resolved: usize,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-enum Key<'a> {
-    Uuid(&'a str),
-    Content(u64),
+/// Lower ranks look more like Claude's own file. Older clync merges wrote
+/// every uuid-less row after all uuid rows, while Claude interleaves them
+/// (`mode`, `last-prompt`, ...) between turns. Those merges also put rows in
+/// tree order (timestamps going backwards) and collapsed repeated metadata
+/// rows (a shorter file). The hashes settle anything left, so both machines
+/// agree.
+fn claude_order_rank<'a>(
+    entries: &[ConversationEntry],
+    hashes: &'a [u64],
+) -> (bool, u64, std::cmp::Reverse<usize>, &'a [u64]) {
+    let metadata_at_end = entries.iter().any(|e| e.uuid.is_none())
+        && entries
+            .iter()
+            .skip_while(|e| e.uuid.is_some())
+            .all(|e| e.uuid.is_none());
+    let times: Vec<u64> = entries
+        .iter()
+        .filter(|e| e.uuid.is_some())
+        .map(ConversationEntry::timestamp_millis)
+        .collect();
+    let backwards: u64 = times.windows(2).map(|w| w[0].saturating_sub(w[1])).sum();
+    (
+        metadata_at_end,
+        backwards,
+        std::cmp::Reverse(entries.len()),
+        hashes,
+    )
 }
 
-fn key(entry: &ConversationEntry) -> Key<'_> {
-    entry
-        .uuid
-        .as_deref()
-        .map_or_else(|| Key::Content(entry.content_hash()), Key::Uuid)
-}
-
-/// Merges keep the local file's row order. Claude Code resumes from the last
-/// row in file order, so reordering (e.g. into tree order with metadata such as
-/// `last-prompt` pushed to the end) can make it resume from the wrong turn.
-/// Remote-only entries go right after the last entry both sides share.
+/// Merges keep file order, because Claude Code resumes from the last row in
+/// file order. Both copies are append-only logs of the same session, so they
+/// share a common prefix; after that fork point the remote's new rows go
+/// first and the local machine's own rows last, keeping its latest turn last.
 pub fn smart_merge(local: &[ConversationEntry], remote: &[ConversationEntry]) -> MergeResult {
-    let remote_by_uuid: HashMap<&str, &ConversationEntry> = remote
+    let local_hashes: Vec<u64> = local.iter().map(ConversationEntry::content_hash).collect();
+    let remote_hashes: Vec<u64> = remote.iter().map(ConversationEntry::content_hash).collect();
+    let fork = local_hashes
         .iter()
-        .filter_map(|e| e.uuid.as_deref().map(|u| (u, e)))
-        .collect();
-    let local_keys: HashSet<Key> = local.iter().map(key).collect();
+        .zip(&remote_hashes)
+        .take_while(|(l, r)| l == r)
+        .count();
 
-    let mut local_only = HashSet::new();
-    let mut edited = HashSet::new();
-    let merged_local: Vec<&ConversationEntry> = local
+    let local_uuids: HashSet<&str> = local.iter().filter_map(|e| e.uuid.as_deref()).collect();
+    let remote_uuids: HashSet<&str> = remote.iter().filter_map(|e| e.uuid.as_deref()).collect();
+
+    // A side whose rows past the fork are all in the other file adds nothing
+    // (it is stale, possibly reordered by an older clync merge), so take the
+    // other file unchanged. When both qualify they hold the same rows in a
+    // different order, and `claude_order_rank` picks the same file on both
+    // machines.
+    let local_set: HashSet<u64> = local_hashes.iter().copied().collect();
+    let remote_set: HashSet<u64> = remote_hashes.iter().copied().collect();
+    let adds_nothing = |tail: &[u64], other: &HashSet<u64>| tail.iter().all(|h| other.contains(h));
+    let local_stale = adds_nothing(&local_hashes[fork..], &remote_set);
+    let remote_stale = adds_nothing(&remote_hashes[fork..], &local_set);
+    let keep_local = !local_stale
+        || claude_order_rank(local, &local_hashes) <= claude_order_rank(remote, &remote_hashes);
+    if remote_stale && keep_local {
+        return MergeResult {
+            entries: local.to_vec(),
+            local_only: local_uuids.difference(&remote_uuids).count(),
+            remote_only: 0,
+            edits_resolved: 0,
+        };
+    }
+    if local_stale {
+        return MergeResult {
+            entries: remote.to_vec(),
+            local_only: 0,
+            remote_only: remote_uuids.difference(&local_uuids).count(),
+            edits_resolved: 0,
+        };
+    }
+
+    let remote_by_uuid: HashMap<&str, (&ConversationEntry, u64)> = remote
         .iter()
-        .map(|entry| {
-            let Some(uuid) = entry.uuid.as_deref() else {
-                return entry;
-            };
-            let Some(remote_entry) = remote_by_uuid.get(uuid) else {
-                local_only.insert(uuid);
-                return entry;
-            };
-            if entry.content_hash() == remote_entry.content_hash() {
-                return entry;
-            }
-            edited.insert(uuid);
-            if remote_entry.timestamp_millis() > entry.timestamp_millis() {
-                remote_entry
-            } else {
-                entry
-            }
-        })
+        .zip(&remote_hashes)
+        .filter_map(|(e, h)| e.uuid.as_deref().map(|u| (u, (e, *h))))
         .collect();
+    // Claude repeats identical metadata rows (`mode`, `permission-mode`, ...)
+    // after every turn; a copy already in the local tail adds nothing.
+    let local_tail_hashes: HashSet<u64> = local_hashes[fork..].iter().copied().collect();
 
-    // Remote-only entries, grouped by the shared entry they follow (None = start).
-    let mut inserts: HashMap<Option<Key>, Vec<&ConversationEntry>> = HashMap::new();
-    let mut anchor: Option<Key> = None;
-    let mut added: HashSet<Key> = HashSet::new();
-    let mut remote_only = HashSet::new();
-    for entry in remote {
-        let k = key(entry);
-        if local_keys.contains(&k) {
-            anchor = Some(k);
-        } else if added.insert(k) {
-            if let Some(uuid) = entry.uuid.as_deref() {
-                remote_only.insert(uuid);
-            }
-            inserts.entry(anchor.clone()).or_default().push(entry);
+    let mut entries: Vec<ConversationEntry> = Vec::with_capacity(local.len().max(remote.len()));
+    entries.extend(local[..fork].iter().cloned());
+
+    let mut remote_only: HashSet<&str> = HashSet::new();
+    for (entry, hash) in remote[fork..].iter().zip(&remote_hashes[fork..]) {
+        let keep = match entry.uuid.as_deref() {
+            Some(uuid) => !local_uuids.contains(uuid) && remote_only.insert(uuid),
+            None => !local_tail_hashes.contains(hash),
+        };
+        if keep {
+            entries.push(entry.clone());
         }
     }
 
-    let mut entries: Vec<ConversationEntry> = inserts
-        .remove(&None)
-        .unwrap_or_default()
-        .into_iter()
-        .cloned()
-        .collect();
-    for (original, merged) in local.iter().zip(merged_local) {
-        entries.push(merged.clone());
-        if let Some(list) = inserts.remove(&Some(key(original))) {
-            entries.extend(list.into_iter().cloned());
+    let mut local_only = 0usize;
+    let mut edited: HashSet<&str> = HashSet::new();
+    for (entry, hash) in local[fork..].iter().zip(&local_hashes[fork..]) {
+        let Some(uuid) = entry.uuid.as_deref() else {
+            entries.push(entry.clone());
+            continue;
+        };
+        let Some(&(remote_entry, remote_hash)) = remote_by_uuid.get(uuid) else {
+            local_only += 1;
+            entries.push(entry.clone());
+            continue;
+        };
+        if *hash == remote_hash {
+            entries.push(entry.clone());
+            continue;
         }
+        edited.insert(uuid);
+        // Content hash breaks timestamp ties so both machines pick the same copy.
+        let remote_newer =
+            (remote_entry.timestamp_millis(), remote_hash) > (entry.timestamp_millis(), *hash);
+        entries.push(if remote_newer { remote_entry } else { entry }.clone());
     }
 
     MergeResult {
         entries,
-        local_only: local_only.len(),
+        local_only,
         remote_only: remote_only.len(),
         edits_resolved: edited.len(),
     }
@@ -511,5 +553,150 @@ mod tests {
         let result = smart_merge(&local, &remote);
         assert_eq!(result.edits_resolved, 1);
         assert_eq!(result.entries[0].extra["v"], 2);
+    }
+
+    #[test]
+    fn merge_local_prefix_of_remote_with_repeated_metadata_equals_remote() {
+        let raw = r#"{"type":"mode","mode":"normal"}
+{"uuid":"u1","type":"user","timestamp":"2026-01-01T00:00:01.000Z"}
+{"uuid":"a1","parentUuid":"u1","type":"assistant","timestamp":"2026-01-01T00:00:02.000Z"}
+{"type":"mode","mode":"normal"}
+{"type":"last-prompt","lastPrompt":"one","leafUuid":"a1"}
+{"uuid":"u2","parentUuid":"a1","type":"user","timestamp":"2026-01-01T00:00:03.000Z"}
+{"uuid":"a2","parentUuid":"u2","type":"assistant","timestamp":"2026-01-01T00:00:04.000Z"}
+{"type":"mode","mode":"normal"}
+{"type":"last-prompt","lastPrompt":"two","leafUuid":"a2"}
+{"uuid":"u3","parentUuid":"a2","type":"user","timestamp":"2026-01-01T00:00:05.000Z"}
+{"type":"mode","mode":"normal"}"#;
+        let remote = parse_jsonl(raw.as_bytes()).unwrap();
+        let hashes = |es: &[ConversationEntry]| -> Vec<u64> {
+            es.iter().map(ConversationEntry::content_hash).collect()
+        };
+        for cut in 0..=remote.len() {
+            let result = smart_merge(&remote[..cut], &remote);
+            assert_eq!(hashes(&result.entries), hashes(&remote), "cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn merge_edit_with_equal_timestamps_converges() {
+        let a = parse_jsonl(br#"{"uuid":"x","type":"user","timestamp":1,"v":1}"#).unwrap();
+        let b = parse_jsonl(br#"{"uuid":"x","type":"user","timestamp":1,"v":2}"#).unwrap();
+        let ab = smart_merge(&a, &b);
+        let ba = smart_merge(&b, &a);
+        assert_eq!(ab.entries[0].content_hash(), ba.entries[0].content_hash());
+    }
+
+    fn session(prefix: &str, turns: usize, start: usize) -> Vec<ConversationEntry> {
+        let mut raw = String::new();
+        for i in start..start + turns {
+            let parent = if i == 0 {
+                "null".to_string()
+            } else {
+                format!("\"{prefix}{}\"", i - 1)
+            };
+            raw.push_str(&format!(
+                "{{\"uuid\":\"{prefix}{i}\",\"parentUuid\":{parent},\"type\":\"user\",\"timestamp\":{i}}}\n\
+                 {{\"type\":\"mode\",\"mode\":\"normal\"}}\n\
+                 {{\"type\":\"last-prompt\",\"leafUuid\":\"{prefix}{i}\"}}\n"
+            ));
+        }
+        parse_jsonl(raw.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn merge_diverged_sessions_keep_each_branch_together_and_local_last() {
+        let base = session("b", 3, 0);
+        let mut local = base.clone();
+        local.extend(session("l", 2, 3));
+        let mut remote = base.clone();
+        remote.extend(session("r", 5, 3));
+
+        let result = smart_merge(&local, &remote);
+        let order: Vec<&str> = result
+            .entries
+            .iter()
+            .filter_map(|e| e.uuid.as_deref())
+            .collect();
+        assert_eq!(
+            order,
+            ["b0", "b1", "b2", "r3", "r4", "r5", "r6", "r7", "l3", "l4"]
+        );
+        let last = result.entries.last().unwrap();
+        assert_eq!(last.extra["leafUuid"], "l4");
+
+        let again = smart_merge(&result.entries, &remote);
+        let hashes = |es: &[ConversationEntry]| -> Vec<u64> {
+            es.iter().map(ConversationEntry::content_hash).collect()
+        };
+        assert_eq!(hashes(&again.entries), hashes(&result.entries));
+        assert_eq!(
+            hashes(&smart_merge(&result.entries, &local).entries),
+            hashes(&result.entries)
+        );
+    }
+
+    #[test]
+    fn merge_stale_reordered_local_takes_remote() {
+        // An older clync merge left local tree-ordered and behind; remote kept
+        // appending in Claude's order. Remote already has everything local has.
+        let remote = session("s", 6, 0);
+        let mut local: Vec<ConversationEntry> = remote[..9].to_vec();
+        local.sort_by_key(|e| e.uuid.is_none());
+        let hashes = |es: &[ConversationEntry]| -> Vec<u64> {
+            es.iter().map(ConversationEntry::content_hash).collect()
+        };
+        assert_eq!(
+            hashes(&smart_merge(&local, &remote).entries),
+            hashes(&remote)
+        );
+        assert_eq!(
+            hashes(&smart_merge(&remote, &local).entries),
+            hashes(&remote)
+        );
+    }
+
+    #[test]
+    fn merge_same_rows_different_order_keeps_longer_file() {
+        // Claude's original keeps repeated metadata rows; an older clync merge
+        // collapsed them and moved metadata to the end.
+        let claude = session("s", 4, 0);
+        let mut seen = HashSet::new();
+        let mut old: Vec<ConversationEntry> = claude
+            .iter()
+            .filter(|e| seen.insert(e.content_hash()))
+            .cloned()
+            .collect();
+        old.sort_by_key(|e| e.uuid.is_none());
+        assert!(old.len() < claude.len());
+        let hashes = |es: &[ConversationEntry]| -> Vec<u64> {
+            es.iter().map(ConversationEntry::content_hash).collect()
+        };
+        assert_eq!(hashes(&smart_merge(&old, &claude).entries), hashes(&claude));
+        assert_eq!(hashes(&smart_merge(&claude, &old).entries), hashes(&claude));
+    }
+
+    #[test]
+    fn merge_same_length_reordered_copy_converges_on_time_order() {
+        // No repeated metadata, so the reordered copy is the same length.
+        let raw = r#"{"uuid":"u1","type":"user","timestamp":1}
+{"uuid":"a1","parentUuid":"u1","type":"assistant","timestamp":2}
+{"uuid":"t2","parentUuid":"u1","type":"user","timestamp":3}
+{"uuid":"t1","parentUuid":"a1","type":"user","timestamp":4}
+{"uuid":"a2","parentUuid":"t2","type":"assistant","timestamp":5}"#;
+        let claude = parse_jsonl(raw.as_bytes()).unwrap();
+        let tree: Vec<ConversationEntry> =
+            [0, 1, 3, 2, 4].iter().map(|&i| claude[i].clone()).collect();
+        let hashes = |es: &[ConversationEntry]| -> Vec<u64> {
+            es.iter().map(ConversationEntry::content_hash).collect()
+        };
+        assert_eq!(
+            hashes(&smart_merge(&tree, &claude).entries),
+            hashes(&claude)
+        );
+        assert_eq!(
+            hashes(&smart_merge(&claude, &tree).entries),
+            hashes(&claude)
+        );
     }
 }
