@@ -6,6 +6,12 @@ use crate::fileutil::{
     is_encrypted, restore_directory, restore_file, storage_name, sync_directory,
     sync_file_if_changed,
 };
+use crate::ignore::IgnoreRules;
+
+/// Top-level dirs under `~/.claude/skills` that Claude Code owns: `synced`
+/// holds skills it downloads itself on every machine (syncing them would
+/// overwrite fresh copies with stale ones), `.trash` holds deleted skills.
+const SKILLS_SKIP: &[&str] = &["synced", ".trash"];
 
 pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult> {
     let store_path = match config.storage_path() {
@@ -64,6 +70,7 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
         pushed += sync_directory(
             &claude_dir.join("commands"),
             &extras_dir.join("commands"),
+            &IgnoreRules::new(&config.sync.ignore, &[]),
             cipher,
             enc,
             comp,
@@ -74,6 +81,7 @@ pub fn push_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPushResult>
         pushed += sync_directory(
             &claude_dir.join("skills"),
             &extras_dir.join("skills"),
+            &IgnoreRules::new(&config.sync.ignore, SKILLS_SKIP),
             cipher,
             enc,
             comp,
@@ -134,6 +142,7 @@ pub fn pull_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPullResult>
         pulled += restore_directory(
             &extras_dir.join("commands"),
             &claude_dir.join("commands"),
+            &IgnoreRules::new(&config.sync.ignore, &[]),
             cipher,
         )?;
     }
@@ -141,6 +150,7 @@ pub fn pull_extras(config: &Config, cipher: &Cipher) -> Result<ExtrasPullResult>
         pulled += restore_directory(
             &extras_dir.join("skills"),
             &claude_dir.join("skills"),
+            &IgnoreRules::new(&config.sync.ignore, SKILLS_SKIP),
             cipher,
         )?;
     }

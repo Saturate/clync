@@ -8,6 +8,9 @@ pub struct RepoMeta {
     pub encryption: EncryptionMeta,
     #[serde(default)]
     pub targets: TargetsMeta,
+    /// Snapshot of the pusher's `sync.ignore`, used to seed `join`
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignore: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -80,6 +83,7 @@ impl RepoMeta {
                 skills: t.skills,
                 global_claude_md: t.global_claude_md,
             },
+            ignore: config.sync.ignore.clone(),
         }
     }
 }
@@ -99,6 +103,7 @@ mod tests {
                 hint: None,
             },
             targets: TargetsMeta::default(),
+            ignore: Vec::new(),
         };
         assert_eq!(meta.file_extension(), "jsonl");
     }
@@ -112,6 +117,7 @@ mod tests {
                 hint: None,
             },
             targets: TargetsMeta::default(),
+            ignore: Vec::new(),
         };
         assert_eq!(meta.file_extension(), "age");
     }
@@ -135,6 +141,7 @@ mod tests {
                 skills: false,
                 global_claude_md: false,
             },
+            ignore: vec!["dist".into(), "!.git".into()],
         };
         meta.save(&dir).unwrap();
 
@@ -143,6 +150,7 @@ mod tests {
         assert_eq!(loaded.encryption.method, "none");
         assert!(loaded.targets.sessions);
         assert!(!loaded.targets.settings);
+        assert_eq!(loaded.ignore, ["dist", "!.git"]);
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -163,6 +171,7 @@ mod tests {
                 strict_path_validation: false,
                 compression: true,
                 compression_level: crate::config::default_compression_level(),
+                ignore: Vec::new(),
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,
@@ -189,6 +198,7 @@ mod tests {
                 strict_path_validation: false,
                 compression: true,
                 compression_level: crate::config::default_compression_level(),
+                ignore: Vec::new(),
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,
@@ -216,6 +226,7 @@ mod tests {
                 strict_path_validation: false,
                 compression: true,
                 compression_level: crate::config::default_compression_level(),
+                ignore: Vec::new(),
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,
@@ -242,6 +253,7 @@ mod tests {
                 strict_path_validation: false,
                 compression: true,
                 compression_level: crate::config::default_compression_level(),
+                ignore: Vec::new(),
                 storage: StorageConfig::Git {
                     path: PathBuf::from("/tmp"),
                     auto_push: true,

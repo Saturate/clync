@@ -126,6 +126,7 @@ pub fn cmd_join(
             strict_path_validation: false,
             compression: true,
             compression_level: config::default_compression_level(),
+            ignore: meta.as_ref().map(|m| m.ignore.clone()).unwrap_or_default(),
             storage: StorageConfig::Git {
                 path: repo.clone(),
                 auto_push: true,

@@ -66,6 +66,7 @@ src/
   sync.rs          Session sync engine (push/pull/merge)
   memories.rs      Memory sync with path normalization
   extras.rs        Settings, commands, skills sync
+  ignore.rs        Ignore rules for directory sync (defaults + sync.ignore)
   fileutil.rs      Shared file helpers (encrypt, restore, sync)
   gitcmd.rs        `git` command builder (long paths on Windows)
   store/
