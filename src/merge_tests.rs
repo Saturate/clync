@@ -444,7 +444,7 @@ fn merge_edit_with_equal_timestamps_converges() {
 }
 
 fn session(prefix: &str, turns: usize, start: usize) -> Vec<ConversationEntry> {
-    let mut raw = String::new();
+    let mut raw = String::default();
     for i in start..start + turns {
         let parent = if i == 0 {
             "null".to_string()
