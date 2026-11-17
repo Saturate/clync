@@ -10,150 +10,90 @@ pub struct MergeResult {
     pub edits_resolved: usize,
 }
 
-pub fn smart_merge(local: &[ConversationEntry], remote: &[ConversationEntry]) -> MergeResult {
-    let mut uuid_entries: HashMap<String, &ConversationEntry> = HashMap::new();
-    let mut non_uuid_local: Vec<&ConversationEntry> = Vec::new();
-    let mut non_uuid_remote: Vec<&ConversationEntry> = Vec::new();
-
-    let mut local_only = 0usize;
-    let mut remote_only = 0usize;
-    let mut edits_resolved = 0usize;
-
-    let local_uuids: HashMap<String, &ConversationEntry> = local
-        .iter()
-        .filter_map(|e| e.uuid.as_ref().map(|u| (u.clone(), e)))
-        .collect();
-
-    let remote_uuids: HashMap<String, &ConversationEntry> = remote
-        .iter()
-        .filter_map(|e| e.uuid.as_ref().map(|u| (u.clone(), e)))
-        .collect();
-
-    for (uuid, local_entry) in &local_uuids {
-        if let Some(remote_entry) = remote_uuids.get(uuid) {
-            let local_hash = local_entry.content_hash();
-            let remote_hash = remote_entry.content_hash();
-            if local_hash == remote_hash {
-                uuid_entries.insert(uuid.clone(), local_entry);
-            } else {
-                edits_resolved += 1;
-                if remote_entry.timestamp_millis() > local_entry.timestamp_millis() {
-                    uuid_entries.insert(uuid.clone(), remote_entry);
-                } else {
-                    uuid_entries.insert(uuid.clone(), local_entry);
-                }
-            }
-        } else {
-            local_only += 1;
-            uuid_entries.insert(uuid.clone(), local_entry);
-        }
-    }
-
-    for (uuid, remote_entry) in &remote_uuids {
-        if !local_uuids.contains_key(uuid) {
-            remote_only += 1;
-            uuid_entries.insert(uuid.clone(), remote_entry);
-        }
-    }
-
-    for entry in local {
-        if entry.uuid.is_none() {
-            non_uuid_local.push(entry);
-        }
-    }
-    for entry in remote {
-        if entry.uuid.is_none() {
-            non_uuid_remote.push(entry);
-        }
-    }
-
-    let mut seen_hashes: HashSet<u64> = HashSet::new();
-    let mut non_uuid_merged: Vec<&ConversationEntry> = Vec::new();
-    for entry in non_uuid_local.iter().chain(non_uuid_remote.iter()) {
-        let hash = entry.content_hash();
-        if seen_hashes.insert(hash) {
-            non_uuid_merged.push(entry);
-        }
-    }
-
-    let mut result: Vec<ConversationEntry> = build_ordered_tree(&uuid_entries);
-    let mut non_uuid_cloned: Vec<ConversationEntry> =
-        non_uuid_merged.into_iter().cloned().collect();
-    non_uuid_cloned.sort_by_key(|e| e.timestamp_millis());
-    result.extend(non_uuid_cloned);
-
-    MergeResult {
-        entries: result,
-        local_only,
-        remote_only,
-        edits_resolved,
-    }
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Key<'a> {
+    Uuid(&'a str),
+    Content(u64),
 }
 
-fn build_ordered_tree(entries: &HashMap<String, &ConversationEntry>) -> Vec<ConversationEntry> {
-    let mut children: HashMap<Option<&str>, Vec<&str>> = HashMap::new();
-    for (uuid, entry) in entries {
-        children
-            .entry(entry.parent_uuid.as_deref())
-            .or_default()
-            .push(uuid);
-    }
+fn key(entry: &ConversationEntry) -> Key<'_> {
+    entry
+        .uuid
+        .as_deref()
+        .map_or_else(|| Key::Content(entry.content_hash()), Key::Uuid)
+}
 
-    for siblings in children.values_mut() {
-        siblings.sort_by_key(|uuid| {
-            entries
-                .get(*uuid)
-                .map(|e| e.timestamp_millis())
-                .unwrap_or(0)
-        });
-    }
-
-    let mut result = Vec::with_capacity(entries.len());
-    let mut stack: Vec<&str> = Vec::new();
-
-    if let Some(roots) = children.get(&None) {
-        for root in roots.iter().rev() {
-            stack.push(root);
-        }
-    }
-
-    let all_parent_uuids: HashSet<&str> = entries
-        .values()
-        .filter_map(|e| e.parent_uuid.as_deref())
+/// Merges keep the local file's row order. Claude Code resumes from the last
+/// row in file order, so reordering (e.g. into tree order with metadata such as
+/// `last-prompt` pushed to the end) can make it resume from the wrong turn.
+/// Remote-only entries go right after the last entry both sides share.
+pub fn smart_merge(local: &[ConversationEntry], remote: &[ConversationEntry]) -> MergeResult {
+    let remote_by_uuid: HashMap<&str, &ConversationEntry> = remote
+        .iter()
+        .filter_map(|e| e.uuid.as_deref().map(|u| (u, e)))
         .collect();
-    for uuid in entries.keys() {
-        if !all_parent_uuids.contains(uuid.as_str())
-            && entries
-                .get(uuid)
-                .and_then(|e| e.parent_uuid.as_ref())
-                .is_some_and(|p| !entries.contains_key(p))
-        {
-            stack.push(uuid);
-        }
-    }
+    let local_keys: HashSet<Key> = local.iter().map(key).collect();
 
-    let mut visited: HashSet<&str> = HashSet::new();
-    while let Some(uuid) = stack.pop() {
-        if !visited.insert(uuid) {
-            continue;
-        }
-        if let Some(entry) = entries.get(uuid) {
-            result.push((*entry).clone());
-        }
-        if let Some(kids) = children.get(&Some(uuid)) {
-            for kid in kids.iter().rev() {
-                stack.push(kid);
+    let mut local_only = HashSet::new();
+    let mut edited = HashSet::new();
+    let merged_local: Vec<&ConversationEntry> = local
+        .iter()
+        .map(|entry| {
+            let Some(uuid) = entry.uuid.as_deref() else {
+                return entry;
+            };
+            let Some(remote_entry) = remote_by_uuid.get(uuid) else {
+                local_only.insert(uuid);
+                return entry;
+            };
+            if entry.content_hash() == remote_entry.content_hash() {
+                return entry;
             }
+            edited.insert(uuid);
+            if remote_entry.timestamp_millis() > entry.timestamp_millis() {
+                remote_entry
+            } else {
+                entry
+            }
+        })
+        .collect();
+
+    // Remote-only entries, grouped by the shared entry they follow (None = start).
+    let mut inserts: HashMap<Option<Key>, Vec<&ConversationEntry>> = HashMap::new();
+    let mut anchor: Option<Key> = None;
+    let mut added: HashSet<Key> = HashSet::new();
+    let mut remote_only = HashSet::new();
+    for entry in remote {
+        let k = key(entry);
+        if local_keys.contains(&k) {
+            anchor = Some(k);
+        } else if added.insert(k) {
+            if let Some(uuid) = entry.uuid.as_deref() {
+                remote_only.insert(uuid);
+            }
+            inserts.entry(anchor.clone()).or_default().push(entry);
         }
     }
 
-    for (uuid, entry) in entries {
-        if !visited.contains(uuid.as_str()) {
-            result.push((*entry).clone());
+    let mut entries: Vec<ConversationEntry> = inserts
+        .remove(&None)
+        .unwrap_or_default()
+        .into_iter()
+        .cloned()
+        .collect();
+    for (original, merged) in local.iter().zip(merged_local) {
+        entries.push(merged.clone());
+        if let Some(list) = inserts.remove(&Some(key(original))) {
+            entries.extend(list.into_iter().cloned());
         }
     }
 
-    result
+    MergeResult {
+        entries,
+        local_only: local_only.len(),
+        remote_only: remote_only.len(),
+        edits_resolved: edited.len(),
+    }
 }
 
 #[cfg(test)]
@@ -513,5 +453,63 @@ mod tests {
         assert!(uuids.contains(&"edit1"));
         assert!(uuids.contains(&"reply2"));
         assert!(uuids.contains(&"remote-reply"));
+    }
+
+    fn uuids(entries: &[ConversationEntry]) -> Vec<&str> {
+        entries
+            .iter()
+            .map(|e| e.uuid.as_deref().unwrap_or("-"))
+            .collect()
+    }
+
+    #[test]
+    fn merge_keeps_local_file_order_and_last_prompt_position() {
+        // Parallel tool results: t2 is a sibling of t1 written later, and
+        // last-prompt is the final row. Tree order would put t2 under t1's
+        // subtree and move last-prompt to the end with other metadata.
+        let raw = r#"{"uuid":"u1","type":"user","timestamp":"2026-01-01T00:00:01.000Z"}
+{"uuid":"a1","parentUuid":"u1","type":"assistant","timestamp":"2026-01-01T00:00:02.000Z"}
+{"uuid":"t2","parentUuid":"u1","type":"user","timestamp":"2026-01-01T00:00:04.000Z"}
+{"uuid":"t1","parentUuid":"a1","type":"user","timestamp":"2026-01-01T00:00:03.000Z"}
+{"type":"last-prompt","lastPrompt":"hi","leafUuid":"t1"}"#;
+        let entries = parse_jsonl(raw.as_bytes()).unwrap();
+        let result = smart_merge(&entries, &entries);
+        assert_eq!(uuids(&result.entries), ["u1", "a1", "t2", "t1", "-"]);
+    }
+
+    #[test]
+    fn merge_inserts_remote_turn_after_last_shared_entry() {
+        let local = vec![
+            entry("m1", 100, "hi"),
+            entry_with_parent("m2", "m1", 200),
+            entry_with_parent("l1", "m2", 300),
+        ];
+        let remote = vec![
+            entry("m1", 100, "hi"),
+            entry_with_parent("m2", "m1", 200),
+            entry_with_parent("r1", "m2", 250),
+            entry_with_parent("r2", "r1", 260),
+        ];
+        let result = smart_merge(&local, &remote);
+        assert_eq!(uuids(&result.entries), ["m1", "m2", "r1", "r2", "l1"]);
+        assert_eq!((result.local_only, result.remote_only), (1, 2));
+
+        let again = smart_merge(&result.entries, &remote);
+        assert_eq!(uuids(&again.entries), uuids(&result.entries));
+    }
+
+    #[test]
+    fn merge_newer_iso_timestamp_wins_edit() {
+        let local = parse_jsonl(
+            br#"{"uuid":"a","type":"user","timestamp":"2026-01-01T00:00:01.000Z","v":1}"#,
+        )
+        .unwrap();
+        let remote = parse_jsonl(
+            br#"{"uuid":"a","type":"user","timestamp":"2026-01-01T00:00:02.000Z","v":2}"#,
+        )
+        .unwrap();
+        let result = smart_merge(&local, &remote);
+        assert_eq!(result.edits_resolved, 1);
+        assert_eq!(result.entries[0].extra["v"], 2);
     }
 }

@@ -117,7 +117,7 @@ pub fn live_branch(entries: &[Value], path: &Path) -> Vec<usize> {
     };
 
     // Leaves newest first rather than the last line: sessions rewritten by
-    // clync's own sync merge are in tree order, so the last line can be a
+    // older clync sync merges are in tree order, so the last line can be a
     // parallel sibling from an earlier turn.
     let leaves = newest_leaves(entries, &parent_of, &index_of);
     let (chosen, _, gap) = match pick_leaf(entries, &index_of) {
