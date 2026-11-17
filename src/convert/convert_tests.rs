@@ -247,7 +247,7 @@ fn pi_reader_follows_the_live_branch() {
 }
 
 #[test]
-fn claude_provenance_found_after_sync_merge_moves_it_to_the_end() {
+fn claude_provenance_found_at_end_of_file() {
     let dir = std::env::temp_dir().join(format!("clync-convert-prov-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("s.jsonl");

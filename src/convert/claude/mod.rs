@@ -93,8 +93,8 @@ pub fn resolve_session(arg: &str) -> Result<PathBuf> {
 }
 
 /// Converted sessions already in Claude, keyed by origin. Scans whole files:
-/// clync's sync merge moves entries without a uuid, provenance included, to
-/// the end.
+/// older clync sync merges moved entries without a uuid, provenance included,
+/// to the end.
 pub fn provenance_index() -> Result<HashMap<Origin, PathBuf>> {
     let mut index = HashMap::new();
     for path in session_files(&projects_dir()?)? {

@@ -32,11 +32,17 @@ impl ConversationEntry {
     }
 
     pub fn timestamp_millis(&self) -> u64 {
-        match &self.timestamp {
-            Some(Value::Number(n)) => n.as_u64().unwrap_or(0),
-            Some(Value::String(s)) => s.parse().unwrap_or(0),
-            _ => 0,
-        }
+        // Claude Code writes ISO 8601 strings; older fixtures use epoch numbers.
+        let millis = match &self.timestamp {
+            Some(Value::Number(n)) => n.as_u64(),
+            Some(Value::String(s)) => s.parse().ok().or_else(|| {
+                chrono::DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .and_then(|dt| u64::try_from(dt.timestamp_millis()).ok())
+            }),
+            _ => None,
+        };
+        millis.unwrap_or(0)
     }
 }
 
@@ -90,6 +96,13 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamp_millis_parses_iso_strings() {
+        let entry: ConversationEntry =
+            serde_json::from_str(r#"{"timestamp":"2026-01-01T00:00:01.500Z"}"#).unwrap();
+        assert_eq!(entry.timestamp_millis(), 1_767_225_601_500);
+    }
 
     #[test]
     fn parse_empty() {
