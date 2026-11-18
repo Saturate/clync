@@ -321,3 +321,40 @@ fn pi_session_store_follows_pi_overrides() {
         home.join("s").join("--Users-a-proj--")
     );
 }
+
+#[test]
+fn opencode_project_uses_main_worktree_for_linked_worktrees() {
+    let root = std::env::temp_dir().join(format!("clync-oc-worktree-{}", std::process::id()));
+    let main = root.join("main");
+    let linked = root.join("linked");
+    std::fs::create_dir_all(&main).unwrap();
+    let git = |dir: &Path, args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&main, &["init", "-q"]);
+    git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(&main, &["worktree", "add", "-q", linked.to_str().unwrap()]);
+
+    let found = opencode::project::main_worktree(&linked).map(|p| p.canonicalize().unwrap());
+    let from_main = opencode::project::main_worktree(&main).map(|p| p.canonicalize().unwrap());
+    let expected = main.canonicalize().unwrap();
+    std::fs::remove_dir_all(&root).ok();
+    assert_eq!(found, Some(expected));
+    assert_eq!(from_main, found);
+}

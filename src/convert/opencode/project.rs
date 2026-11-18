@@ -22,7 +22,11 @@ pub fn resolve_project(conn: &Connection, dir: &Path) -> Result<String> {
                 .or_else(|| cached_id(dir))
                 .or_else(|| root_commit(dir))
                 .unwrap_or_else(|| "global".to_string());
-            (id, PathBuf::from(toplevel), Some("git"))
+            (
+                id,
+                main_worktree(dir).unwrap_or_else(|| PathBuf::from(toplevel)),
+                Some("git"),
+            )
         }
         None => {
             let path = super::super::canonical_dir(dir).unwrap_or_else(|| dir.to_path_buf());
@@ -119,6 +123,16 @@ fn cached_id(dir: &Path) -> Option<String> {
     let id = std::fs::read_to_string(Path::new(&common).join("opencode")).ok()?;
     let id = id.trim();
     (!id.is_empty()).then(|| id.to_string())
+}
+
+/// opencode records a linked worktree's project under the main worktree, the
+/// first entry of `git worktree list`.
+pub fn main_worktree(dir: &Path) -> Option<PathBuf> {
+    let list = git(dir, &["worktree", "list", "--porcelain"])?;
+    list.lines()
+        .next()?
+        .strip_prefix("worktree ")
+        .map(PathBuf::from)
 }
 
 fn root_commit(dir: &Path) -> Option<String> {
