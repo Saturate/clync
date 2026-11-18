@@ -22,7 +22,7 @@ impl S3Store {
     ) -> Result<Self> {
         let region = if let Some(ep) = endpoint {
             Region::Custom {
-                region: region.into(),
+                region,
                 endpoint: ep,
             }
         } else {
