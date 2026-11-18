@@ -299,6 +299,8 @@ Key v2 differences from v1 spec:
 
 **Location:** `~/.pi/agent/sessions/<encoded-project-dir>/<timestamp>_<uuid>.jsonl`
 
+The agent dir is `PI_CODING_AGENT_DIR` when set. A custom session dir (`PI_CODING_AGENT_SESSION_DIR`, else `sessionDir` in the agent dir's `settings.json`) replaces `sessions/` and is flat: session files sit directly in it, with no project folders. pi's `--session-dir` flag and project-level `.pi/settings.json` apply per invocation and aren't followed.
+
 **Storage:** One JSONL file per session. Each line is a JSON object. Lines form a chain via `id`/`parentId` fields. Project dirs are double-dash encoded: `--Users-alkj-code-github-clync--`.
 
 **Entry types** (the `type` field):
