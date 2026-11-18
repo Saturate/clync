@@ -21,7 +21,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
       - run: cargo test --workspace
-      - run: cargo clippy --all-targets -- -D warnings -W clippy::too_many_lines
+      - run: cargo clippy --all-targets --all-features -- -D warnings -W clippy::too_many_lines
 
   e2e-storage:
     name: Storage E2E
