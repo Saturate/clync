@@ -3,6 +3,21 @@
 All notable changes to clync will be documented in this file.
 
 
+
+## 0.6.0 - 2026-11-18
+
+Fix release workflow to include Cargo.lock in the release commit
+
+#### Fix clippy on the s3 feature and lint all features in CI.
+
+Merged sessions keep their line order instead of being rewritten in tree order with metadata such as `last-prompt` moved to the end, so Claude Code resumes from the right turn. Rows both copies share stay put, the other machine's new rows follow, and this machine's own rows come last. A copy that adds nothing is replaced by the other one, which also moves sessions reordered by older clync versions back to Claude's order. ISO 8601 timestamps are now parsed, so the newer copy of an edited entry wins.
+
+Stop syncing `node_modules`, `.git`, `__pycache__` and `.venv` directories, Claude Code's own managed skills (`skills/synced/`) and deleted skills (`skills/.trash/`). Copies already in the sync repo are removed on the next push and are never restored on pull. Customize with the new `sync.ignore` setting: add names to skip, or `!name` to re-enable a default. `clync join` picks up the repo's rules, and `clync config set` now accepts arrays.
+
+Convert sessions between Claude Code, opencode and pi with `clync convert`. Converted sessions open in the target tool, keep thinking and compaction text, and re-running a conversion never creates duplicates.
+
+Windows support: session, memory and `mv` paths now match how Claude Code names project folders on every platform (`C:\code\app` → `C--code-app`, and dots, spaces and underscores become `-` too), so sessions sync to the right place between Windows, macOS and Linux. The age key file is restricted to the current user on Windows, and release builds now include a Windows binary.
+
 ## 0.5.0 - 2026-10-07
 
 Switch from cargo-changeset to changesetter for release management
