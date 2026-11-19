@@ -304,8 +304,8 @@ fn pi_session_store_follows_pi_overrides() {
     );
     #[cfg(unix)]
     assert_eq!(
-        store(None, Some("file:///tmp/pi%20sessions")),
-        Flat(PathBuf::from("/tmp/pi sessions"))
+        store(None, Some("file:///srv/pi%20sessions")),
+        Flat(PathBuf::from("/srv/pi sessions"))
     );
     // The env var wins over settings.json, as in pi.
     assert_eq!(
