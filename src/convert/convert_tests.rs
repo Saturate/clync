@@ -295,12 +295,17 @@ fn pi_session_store_follows_pi_overrides() {
 
     std::fs::write(
         agent.join("settings.json"),
-        r#"{"sessionDir": "~/from-settings"}"#,
+        "\u{feff}{\"sessionDir\": \"~/from-settings\"}",
     )
     .unwrap();
     assert_eq!(
         store(Some("~/custom-agent"), None),
         Flat(home.join("from-settings"))
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        store(None, Some("file:///tmp/pi%20sessions")),
+        Flat(PathBuf::from("/tmp/pi sessions"))
     );
     // The env var wins over settings.json, as in pi.
     assert_eq!(

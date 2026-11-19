@@ -58,22 +58,59 @@ pub fn resolve_store(
     agent_env: Option<&str>,
     session_env: Option<&str>,
 ) -> SessionStore {
-    let expand = |p: &str| {
-        PathBuf::from(shellexpand::tilde_with_context(p, || Some(home.to_string_lossy())).as_ref())
-    };
+    let expand = |p: &str| pi_path(home, p);
     let agent_dir = agent_env.map_or_else(|| home.join(".pi").join("agent"), expand);
     if let Some(dir) = session_env {
         return SessionStore::Flat(expand(dir));
     }
     let configured = fs::read_to_string(agent_dir.join("settings.json"))
         .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|text| serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok())
         .and_then(|v| v.get("sessionDir")?.as_str().map(str::to_string))
         .filter(|dir| !dir.is_empty());
     match configured {
         Some(dir) => SessionStore::Flat(expand(&dir)),
         None => SessionStore::PerProject(agent_dir.join("sessions")),
     }
+}
+
+/// pi's `normalizePath`: `~` expands to home and `file://` URLs become paths.
+fn pi_path(home: &Path, p: &str) -> PathBuf {
+    let Some(rest) = p.strip_prefix("file://") else {
+        return PathBuf::from(
+            shellexpand::tilde_with_context(p, || Some(home.to_string_lossy())).as_ref(),
+        );
+    };
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    let decoded = percent_decode(rest);
+    // `file:///C:/x` is `C:/x` on Windows.
+    if cfg!(windows) && decoded.get(2..3) == Some(":") {
+        return PathBuf::from(&decoded[1..]);
+    }
+    PathBuf::from(decoded)
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(b)) => {
+                out.push(b);
+                i += 3;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Encode a project directory the way pi does: drop one leading separator,
