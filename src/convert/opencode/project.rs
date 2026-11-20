@@ -128,8 +128,9 @@ fn cached_id(dir: &Path) -> Option<String> {
 /// opencode records a linked worktree's project under the main worktree, the
 /// first entry of `git worktree list`.
 pub fn main_worktree(dir: &Path) -> Option<PathBuf> {
-    let list = git(dir, &["worktree", "list", "--porcelain"])?;
-    list.lines()
+    // NUL-separated so a path containing a newline isn't cut short.
+    let list = git(dir, &["worktree", "list", "--porcelain", "-z"])?;
+    list.split('\0')
         .next()?
         .strip_prefix("worktree ")
         .map(PathBuf::from)
