@@ -274,3 +274,50 @@ fn lexical_normalize_resolves_parent_dirs() {
         base.join("gone")
     );
 }
+
+#[test]
+fn pi_session_store_follows_pi_overrides() {
+    use pi::SessionStore::{Flat, PerProject};
+    let home = std::env::temp_dir().join(format!("clync-pi-store-{}", std::process::id()));
+    let agent = home.join("custom-agent");
+    std::fs::create_dir_all(&agent).unwrap();
+    let store = |agent_env, session_env| pi::resolve_store(&home, agent_env, session_env);
+
+    assert_eq!(
+        store(None, None),
+        PerProject(home.join(".pi/agent/sessions"))
+    );
+    assert_eq!(
+        store(Some("~/custom-agent"), None),
+        PerProject(agent.join("sessions"))
+    );
+    assert_eq!(store(None, Some("~/flat")), Flat(home.join("flat")));
+
+    std::fs::write(
+        agent.join("settings.json"),
+        "\u{feff}{\"sessionDir\": \"~/from-settings\"}",
+    )
+    .unwrap();
+    assert_eq!(
+        store(Some("~/custom-agent"), None),
+        Flat(home.join("from-settings"))
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        store(None, Some("file:///srv/pi%20sessions")),
+        Flat(PathBuf::from("/srv/pi sessions"))
+    );
+    // The env var wins over settings.json, as in pi.
+    assert_eq!(
+        store(Some("~/custom-agent"), Some("/abs")),
+        Flat(PathBuf::from("/abs"))
+    );
+    std::fs::remove_dir_all(&home).ok();
+
+    let project = Path::new("/Users/a/proj");
+    assert_eq!(Flat(home.join("f")).dir_for(project), home.join("f"));
+    assert_eq!(
+        PerProject(home.join("s")).dir_for(project),
+        home.join("s").join("--Users-a-proj--")
+    );
+}

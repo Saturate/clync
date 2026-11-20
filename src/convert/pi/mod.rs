@@ -20,12 +20,97 @@ use super::{Origin, jsonl};
 pub const PROVENANCE_TYPE: &str = "clync-provenance";
 pub const STASH_TYPE: &str = "clync-stash";
 
-pub fn sessions_dir() -> Result<PathBuf> {
-    Ok(crate::config::home_dir()
-        .context("cannot find home directory")?
-        .join(".pi")
-        .join("agent")
-        .join("sessions"))
+/// Where pi keeps its sessions. The default store has a folder per project;
+/// a custom session dir is flat, with every session file directly inside it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SessionStore {
+    PerProject(PathBuf),
+    Flat(PathBuf),
+}
+
+impl SessionStore {
+    /// Folder a new session for `project` goes in.
+    pub fn dir_for(&self, project: &Path) -> PathBuf {
+        match self {
+            Self::PerProject(root) => root.join(encode_project_dir(project)),
+            Self::Flat(dir) => dir.clone(),
+        }
+    }
+}
+
+pub fn session_store() -> Result<SessionStore> {
+    let home = crate::config::home_dir().context("cannot find home directory")?;
+    let env = |name| std::env::var(name).ok().filter(|v| !v.is_empty());
+    Ok(resolve_store(
+        &home,
+        env("PI_CODING_AGENT_DIR").as_deref(),
+        env("PI_CODING_AGENT_SESSION_DIR").as_deref(),
+    ))
+}
+
+/// pi 1.3's lookup: `PI_CODING_AGENT_SESSION_DIR`, then `sessionDir` in the
+/// agent dir's settings.json, else `<agent dir>/sessions`. The agent dir is
+/// `PI_CODING_AGENT_DIR` or `~/.pi/agent`. pi's `--session-dir` flag and
+/// project-level `.pi/settings.json` only apply per invocation, so they're
+/// not followed here.
+pub fn resolve_store(
+    home: &Path,
+    agent_env: Option<&str>,
+    session_env: Option<&str>,
+) -> SessionStore {
+    let expand = |p: &str| pi_path(home, p);
+    let agent_dir = agent_env.map_or_else(|| home.join(".pi").join("agent"), expand);
+    if let Some(dir) = session_env {
+        return SessionStore::Flat(expand(dir));
+    }
+    let configured = fs::read_to_string(agent_dir.join("settings.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok())
+        .and_then(|v| v.get("sessionDir")?.as_str().map(str::to_string))
+        .filter(|dir| !dir.is_empty());
+    match configured {
+        Some(dir) => SessionStore::Flat(expand(&dir)),
+        None => SessionStore::PerProject(agent_dir.join("sessions")),
+    }
+}
+
+/// pi's `normalizePath`: `~` expands to home and `file://` URLs become paths.
+fn pi_path(home: &Path, p: &str) -> PathBuf {
+    let Some(rest) = p.strip_prefix("file://") else {
+        return PathBuf::from(
+            shellexpand::tilde_with_context(p, || Some(home.to_string_lossy())).as_ref(),
+        );
+    };
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    let decoded = percent_decode(rest);
+    // `file:///C:/x` is `C:/x` on Windows.
+    if cfg!(windows) && decoded.get(2..3) == Some(":") {
+        return PathBuf::from(&decoded[1..]);
+    }
+    PathBuf::from(decoded)
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(b)) => {
+                out.push(b);
+                i += 3;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Encode a project directory the way pi does: drop one leading separator,
@@ -123,17 +208,19 @@ pub fn provenance_origin(data: &Value) -> Option<Origin> {
 }
 
 fn session_files() -> Result<Vec<PathBuf>> {
-    let root = sessions_dir()?;
+    let folders = match session_store()? {
+        SessionStore::Flat(dir) => vec![dir],
+        SessionStore::PerProject(root) if root.exists() => fs::read_dir(&root)?
+            .map(|e| e.map(|e| e.path()))
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|p| p.is_dir())
+            .collect(),
+        SessionStore::PerProject(_) => Vec::new(),
+    };
     let mut files = Vec::new();
-    if !root.exists() {
-        return Ok(files);
-    }
-    for project in fs::read_dir(&root)? {
-        let project = project?.path();
-        if !project.is_dir() {
-            continue;
-        }
-        for entry in fs::read_dir(&project)? {
+    for folder in folders.iter().filter(|f| f.is_dir()) {
+        for entry in fs::read_dir(folder)? {
             let path = entry?.path();
             if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
                 files.push(path);

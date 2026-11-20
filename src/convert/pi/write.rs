@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::super::tools::to_pi_tool_name;
 use super::super::{ContentBlock, ConvertedMessage, ConvertedSession, MessageRole, jsonl};
-use super::{PROVENANCE_TYPE, STASH_TYPE, encode_project_dir, sessions_dir};
+use super::{PROVENANCE_TYPE, STASH_TYPE, session_store};
 
 /// Write a ConvertedSession as a pi JSONL file under the project's folder.
 pub fn write_session(session: &ConvertedSession) -> Result<PathBuf> {
@@ -16,7 +16,7 @@ pub fn write_session(session: &ConvertedSession) -> Result<PathBuf> {
         "project directory '{}' is not an absolute path",
         session.project_dir.display()
     );
-    let dir = sessions_dir()?.join(encode_project_dir(&session.project_dir));
+    let dir = session_store()?.dir_for(&session.project_dir);
     fs::create_dir_all(&dir)?;
 
     // Date the session by its first message so pi's session picker sorts it
