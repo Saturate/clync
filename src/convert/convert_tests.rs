@@ -351,6 +351,17 @@ fn opencode_project_uses_main_worktree_for_linked_worktrees() {
     git(&main, &["init", "-q"]);
     git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]);
     git(&main, &["worktree", "add", "-q", linked.to_str().unwrap()]);
+    let has_z = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&main)
+        .args(["worktree", "list", "--porcelain", "-z"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !has_z {
+        // git before 2.36 has no -z; resolve_project falls back to the toplevel.
+        std::fs::remove_dir_all(&root).ok();
+        return;
+    }
 
     let found = opencode::project::main_worktree(&linked).map(|p| p.canonicalize().unwrap());
     let from_main = opencode::project::main_worktree(&main).map(|p| p.canonicalize().unwrap());
