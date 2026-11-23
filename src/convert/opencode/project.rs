@@ -128,10 +128,13 @@ fn cached_id(dir: &Path) -> Option<String> {
 /// opencode records a linked worktree's project under the main worktree, the
 /// first entry of `git worktree list`.
 pub fn main_worktree(dir: &Path) -> Option<PathBuf> {
-    let list = git(dir, &["worktree", "list", "--porcelain"])?;
-    list.lines()
-        .next()?
-        .strip_prefix("worktree ")
+    // NUL-separated so a path containing a newline isn't cut short. Only the
+    // first field is decoded: with -z, git leaves later fields such as a
+    // linked worktree's lock reason unquoted, so they may not be UTF-8.
+    let list = git_raw(dir, &["worktree", "list", "--porcelain", "-z"])?;
+    let first = list.split(|&b| b == 0).next()?;
+    std::str::from_utf8(first.strip_prefix(b"worktree ")?)
+        .ok()
         .map(PathBuf::from)
 }
 
@@ -150,6 +153,14 @@ pub fn sha1_hex(input: &str) -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
+    let s = String::from_utf8(git_raw(dir, args)?)
+        .ok()?
+        .trim()
+        .to_string();
+    (!s.is_empty()).then_some(s)
+}
+
+fn git_raw(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
     if !dir.is_dir() {
         return None;
     }
@@ -159,9 +170,5 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
         .args(args)
         .output()
         .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
-    (!s.is_empty()).then_some(s)
+    out.status.success().then_some(out.stdout)
 }
